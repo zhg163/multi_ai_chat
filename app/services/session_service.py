@@ -4,7 +4,7 @@ from bson import ObjectId
 import logging
 from pymongo.errors import PyMongoError
 
-from app.models.session import Session
+from app.models.session import Session, SessionStatus
 from app.models.role import Role
 from app.services.role_service import RoleService
 from ..database.mongodb import get_db
@@ -567,7 +567,7 @@ class SessionService:
                 raise ValueError(f"会话ID '{session_id}' 不存在或无权访问")
             
             # 检查状态是否有效
-            valid_statuses = ["active", "archived", "deleted"]
+            valid_statuses = [SessionStatus.ACTIVE, SessionStatus.ARCHIVED, SessionStatus.DELETED]
             if new_status not in valid_statuses:
                 raise ValueError(f"无效的会话状态: {new_status}")
                 
@@ -579,11 +579,16 @@ class SessionService:
                 return True
                 
             # 验证状态转换是否合法
-            if current_status == "deleted" and new_status == "active":
+            if current_status == SessionStatus.DELETED and new_status == SessionStatus.ACTIVE:
                 raise ValueError("已删除的会话不能直接恢复为活跃状态，请先恢复到归档状态")
             
             # 更新会话状态
             update_data = {"status": new_status}
+            
+            # 如果是归档操作，记录归档时间
+            if new_status == SessionStatus.ARCHIVED:
+                update_data["archived_at"] = datetime.utcnow()
+            
             success = await session.update(update_data)
             
             return success

@@ -3,6 +3,12 @@ from typing import List, Optional, Dict, Any
 from bson.objectid import ObjectId
 from app.database.connection import Database
 
+class SessionStatus:
+    """会话状态常量"""
+    ACTIVE = "active"     # 当前活跃会话
+    ARCHIVED = "archived" # 已归档会话
+    DELETED = "deleted"   # 已删除但未永久移除
+
 class Session:
     collection = None
 

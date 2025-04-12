@@ -141,4 +141,8 @@ async def get_current_user_optional(token=Depends(optional_jwt_bearer)):
             "id": "anonymous_user",
             "username": "anonymous",
             "is_anonymous": True
-        } 
+        }
+
+# 添加 get_current_user_or_none 作为 get_current_user_optional 的别名
+# 某些模块可能使用此名称导入
+get_current_user_or_none = get_current_user_optional 

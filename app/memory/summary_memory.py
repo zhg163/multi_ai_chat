@@ -353,15 +353,15 @@ class SummaryMemory:
         """存储会话摘要到长期记忆"""
         try:
             # 检查数据库连接是否可用
-            if not self.db:
+            if self.db is None:
                 logger.warning("MongoDB连接不可用，无法存储摘要")
                 return None
                 
             # 获取数据库连接
             db = await get_database()
-            if not db:
+            if db is None:
                 logger.warning("无法获取MongoDB连接，使用备用方式")
-                if not self.db:
+                if self.db is None:
                     logger.error("无法存储摘要：主连接和备用连接都不可用")
                     return None
                 db = self.db

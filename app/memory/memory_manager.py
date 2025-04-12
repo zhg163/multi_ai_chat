@@ -9,7 +9,9 @@ from typing import List, Dict, Any, Optional
 from app.memory.buffer_memory import ShortTermMemory
 from app.memory.summary_memory import LongTermMemory
 from app.services.summary_service import summary_service
+from app.services.session_service import SessionService
 from app.memory.schemas import SessionResponse, MemoryContext
+from app.models.session import SessionStatus
 from app.config import memory_settings
 
 logger = logging.getLogger(__name__)
@@ -177,13 +179,24 @@ class MemoryManager:
             embedding = summary_service.generate_embedding(summary)
             
             # 存储摘要
-            await self.long_term.store_session_summary(
+            summary_id = await self.long_term.store_session_summary(
                 session_id=session_id,
                 user_id=user_id,
                 summary=summary,
                 messages_count=len(messages),
                 embedding=embedding
             )
+            
+            # 更新会话状态为已归档
+            try:
+                await SessionService.change_session_status(
+                    session_id=session_id,
+                    user_id=user_id,
+                    new_status=SessionStatus.ARCHIVED
+                )
+                logger.info(f"已将会话 {session_id} 状态更新为已归档")
+            except Exception as status_error:
+                logger.error(f"更新会话状态失败: {str(status_error)}")
             
             # 更新会话状态
             self.short_term.end_session(session_id, user_id)

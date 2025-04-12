@@ -27,7 +27,7 @@ if os.path.exists(env_path):
 else:
     logging.warning(f"未找到.env文件: {env_path}")
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -115,6 +115,155 @@ try:
     logging.info("用户管理路由已加载")
 except ImportError as e:
     logging.error(f"无法导入用户管理路由: {str(e)}")
+    
+    # 添加辅助函数获取数据库连接
+    async def get_database():
+        try:
+            from app.database.connection import Database
+            if Database.db is None:
+                await Database.connect()
+            return Database.db
+        except Exception as db_error:
+            logging.error(f"获取数据库连接失败: {str(db_error)}")
+            return None
+    
+    # 添加简易用户API路由
+    @app.get("/api/users/", tags=["users"])
+    async def get_users(
+        limit: int = 100,
+        offset: int = 0
+    ):
+        """
+        获取用户列表，如果数据库中没有用户，则返回示例用户
+        """
+        try:
+            # 获取MongoDB连接
+            db = await get_database()
+            if db is None:
+                logging.warning("数据库连接失败，返回示例用户")
+                return [
+                    {
+                        "_id": "677f834ddaaba35dd9149b0b",
+                        "username": "zhangsan",
+                        "name": "轻舞飞扬",
+                        "email": "zhang@example.com",
+                        "avatar": "https://example.com/avatars/user1.png",
+                        "description": "普通用户",
+                        "tags": ["电影", "篮球"],
+                        "is_active": True
+                    }
+                ]
+            
+            # 记录日志
+            logging.info(f"正在获取用户列表，limit: {limit}, offset: {offset}")
+            
+            # 从数据库查询用户
+            users_cursor = db.users.find({}).skip(offset).limit(limit)
+            users = await users_cursor.to_list(length=limit)
+            
+            # 记录查询结果
+            logging.info(f"从数据库获取到 {len(users)} 个用户")
+            
+            # 如果数据库中有用户，则返回实际用户
+            if users:
+                # 转换ObjectId为字符串
+                for user in users:
+                    user["_id"] = str(user["_id"])
+                return users
+            
+            # 如果数据库中没有用户，则返回示例用户
+            logging.warning("数据库中没有找到用户，返回示例用户")
+            return [
+                {
+                    "_id": "677f834ddaaba35dd9149b0b",
+                    "username": "zhangsan",
+                    "name": "轻舞飞扬",
+                    "email": "zhang@example.com",
+                    "avatar": "https://example.com/avatars/user1.png",
+                    "description": "普通用户",
+                    "tags": ["电影", "篮球"],
+                    "is_active": True
+                }
+            ]
+        
+        except Exception as e:
+            # 记录错误
+            logging.error(f"获取用户列表时发生错误: {str(e)}")
+            return [
+                {
+                    "_id": "677f834ddaaba35dd9149b0b",
+                    "username": "zhangsan",
+                    "name": "轻舞飞扬",
+                    "email": "zhang@example.com",
+                    "avatar": "https://example.com/avatars/user1.png",
+                    "description": "普通用户",
+                    "tags": ["电影", "篮球"],
+                    "is_active": True
+                }
+            ]
+
+# 添加无需认证的结束会话端点
+@app.post("/api/sessions/{session_id}/end-and-archive", tags=["sessions"])
+async def end_and_archive_session(
+    session_id: str,
+    request: Request
+):
+    """结束会话并强制归档所有消息 (无需认证)"""
+    try:
+        # 解析请求体
+        data = await request.json()
+        user_id = data.get("user_id", "anonymous_user")
+        
+        logging.info(f"结束并归档会话: session_id={session_id}, user_id={user_id}")
+        
+        # 获取记忆管理器
+        from app.memory.memory_manager import get_memory_manager
+        memory_manager = await get_memory_manager()
+        
+        # 获取会话中所有消息
+        messages = memory_manager.short_term.get_session_messages(session_id, user_id)
+        message_count = len(messages)
+        
+        if not messages:
+            logging.warning(f"会话 {session_id} 没有消息可归档")
+            return {
+                "success": False,
+                "archived_messages_count": 0,
+                "total_messages": 0,
+                "message": "会话没有消息可归档"
+            }
+        
+        # 归档消息计数
+        archived_count = 0
+        
+        # 逐条归档消息到MongoDB
+        for message in messages:
+            success = await memory_manager.archive_message(session_id, user_id, message)
+            if success:
+                archived_count += 1
+        
+        # 调用会话结束函数，生成摘要
+        result = await memory_manager.end_session(session_id, user_id)
+        
+        return {
+            "success": True,
+            "archived_messages_count": archived_count,
+            "total_messages": message_count,
+            "summary": result.get("summary", ""),
+            "session_id": session_id
+        }
+    except Exception as e:
+        logging.error(f"结束并归档会话失败: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"结束并归档会话失败: {str(e)}")
+
+# 导入会话路由
+try:
+    from app.api.session_routes import router as session_router
+    # 将前缀设置为/api/sessions以符合前端调用
+    app.include_router(session_router, prefix="/api")
+    logging.info("会话管理路由已加载")
+except ImportError as e:
+    logging.error(f"无法导入会话管理路由: {str(e)}")
 
 # 导入记忆模块路由
 try:

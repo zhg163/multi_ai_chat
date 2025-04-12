@@ -1,0 +1,66 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# 虚拟环境
+venv/
+ENV/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# 日志
+logs/
+*.log
+
+# 环境变量
+.env
+.env.local
+.env.*.local
+
+# 前端
+frontend/node_modules/
+frontend/.pnp
+frontend/.pnp.js
+frontend/coverage
+frontend/build
+frontend/.DS_Store
+frontend/.env.local
+frontend/.env.development.local
+frontend/.env.test.local
+frontend/.env.production.local
+frontend/npm-debug.log*
+frontend/yarn-debug.log*
+frontend/yarn-error.log*
+
+# 系统文件
+.DS_Store
+Thumbs.db
+
+# 文档
+doc
+docs
+examples
+scripts
+tests

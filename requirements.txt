@@ -1,0 +1,25 @@
+fastapi==0.103.0
+uvicorn[standard]==0.23.2
+pydantic==2.4.2
+pydantic-settings==2.0.3
+python-dotenv==1.0.0
+motor==3.3.1
+pymongo==4.5.0
+beanie==1.22.6
+passlib==1.7.4
+python-jose==3.3.0
+python-multipart==0.0.6
+# 以下依赖是可选的，如果您的系统不支持_lzma模块，可以使用我们的简化版嵌入服务
+# sentence-transformers==2.2.2
+# 如果要使用完整版嵌入服务，请确保您的Python安装支持lzma模块
+# 或者安装下面的替代版本（修复了与_lzma相关的兼容性问题）
+sentence-transformers==4.0.2
+jieba==0.42.1
+numpy==1.25.2
+aiohttp==3.8.5
+async-timeout==4.0.3
+# LLM服务依赖
+pyjwt>=2.8.0
+backoff>=2.2.1
+# SSE支持
+sse-starlette>=1.6.5

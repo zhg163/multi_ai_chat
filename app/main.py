@@ -7,6 +7,13 @@
 import os
 import logging
 from dotenv import load_dotenv
+from datetime import datetime
+import time
+from typing import Dict
+from fastapi import FastAPI, HTTPException, Request, Response, Body
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import HTMLResponse, RedirectResponse
 
 # 配置日志
 logging.basicConfig(
@@ -27,7 +34,7 @@ if os.path.exists(env_path):
 else:
     logging.warning(f"未找到.env文件: {env_path}")
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -71,6 +78,7 @@ try:
 except ImportError as e:
     logging.error(f"无法导入消息处理路由: {str(e)}")
 
+# 导入角色路由
 try:
     from app.api.role_routes import router as role_router
     app.include_router(role_router)
@@ -115,17 +123,17 @@ try:
     logging.info("用户管理路由已加载")
 except ImportError as e:
     logging.error(f"无法导入用户管理路由: {str(e)}")
+
+# 导入会话路由
+try:
+    from app.api.session_routes import router as session_router
+    app.include_router(session_router)
+    logging.info("会话管理路由已加载")
+except ImportError as e:
+    logging.error(f"无法导入会话管理路由: {str(e)}")
     
-    # 添加辅助函数获取数据库连接
-    async def get_database():
-        try:
-            from app.database.connection import Database
-            if Database.db is None:
-                await Database.connect()
-            return Database.db
-        except Exception as db_error:
-            logging.error(f"获取数据库连接失败: {str(db_error)}")
-            return None
+    # 导入标准数据库模块
+    from app.database.mongodb import get_database, get_collection
     
     # 添加简易用户API路由
     @app.get("/api/users/", tags=["users"])
@@ -137,7 +145,7 @@ except ImportError as e:
         获取用户列表，如果数据库中没有用户，则返回示例用户
         """
         try:
-            # 获取MongoDB连接
+            # 使用标准方法获取MongoDB连接
             db = await get_database()
             if db is None:
                 logging.warning("数据库连接失败，返回示例用户")
@@ -202,73 +210,115 @@ except ImportError as e:
                 }
             ]
 
-# 添加无需认证的结束会话端点
-@app.post("/api/sessions/{session_id}/end-and-archive", tags=["sessions"])
-async def end_and_archive_session(
-    session_id: str,
-    request: Request
+# 添加用户选择端点
+@app.post("/api/users/select-user", tags=["users"])
+async def select_user_login(
+    request: Request,
+    user_data: Dict = Body(...)
 ):
-    """结束会话并强制归档所有消息 (无需认证)"""
+    """选择用户并登录"""
     try:
-        # 解析请求体
-        data = await request.json()
-        user_id = data.get("user_id", "anonymous_user")
+        user_id = user_data.get("user_id")
+        session_id = user_data.get("session_id")
         
-        logging.info(f"结束并归档会话: session_id={session_id}, user_id={user_id}")
+        logging.info(f"用户选择请求，user_id={user_id}, session_id={session_id}")
         
-        # 获取记忆管理器
-        from app.memory.memory_manager import get_memory_manager
-        memory_manager = await get_memory_manager()
+        if not user_id:
+            raise HTTPException(status_code=400, detail="缺少用户ID")
         
-        # 获取会话中所有消息
-        messages = memory_manager.short_term.get_session_messages(session_id, user_id)
-        message_count = len(messages)
+        # 验证用户ID格式    
+        if user_id == 'undefined' or user_id == 'null':
+            raise HTTPException(status_code=400, detail="无效的用户ID格式：不能为'undefined'或'null'")
+            
+        # 验证用户是否存在
+        from app.database.connection import get_database
+        from bson.objectid import ObjectId, InvalidId
         
-        if not messages:
-            logging.warning(f"会话 {session_id} 没有消息可归档")
-            return {
-                "success": False,
-                "archived_messages_count": 0,
-                "total_messages": 0,
-                "message": "会话没有消息可归档"
-            }
+        db = await get_database()
+        if db is None:
+            raise HTTPException(status_code=500, detail="数据库连接失败")
+            
+        try:
+            # 尝试转换为ObjectId
+            obj_id = ObjectId(user_id)
+            logging.info(f"尝试查找用户，ObjectId={obj_id}")
+            
+            # 查询用户
+            user = await db.users.find_one({"_id": obj_id})
+            logging.info(f"用户查询结果: {user is not None}")
+        except InvalidId as e:
+            logging.error(f"无效的ObjectId格式: {user_id}, 错误: {str(e)}")
+            raise HTTPException(status_code=400, detail=f"无效的用户ID格式: {str(e)}")
+        except Exception as e:
+            logging.error(f"查询用户时出错: {str(e)}", exc_info=True)
+            raise HTTPException(status_code=400, detail=f"无效的用户ID或查询失败: {str(e)}")
+            
+        if not user:
+            raise HTTPException(status_code=404, detail="用户不存在")
+            
+        # 生成访问令牌
+        from app.auth.auth_handler import create_access_token
+        from datetime import timedelta
         
-        # 归档消息计数
-        archived_count = 0
+        expires_delta = timedelta(days=7)
+        access_token = create_access_token(
+            data={"sub": str(user["_id"])},
+            expires_delta=expires_delta
+        )
         
-        # 逐条归档消息到MongoDB
-        for message in messages:
-            success = await memory_manager.archive_message(session_id, user_id, message)
-            if success:
-                archived_count += 1
+        # 如果提供了会话ID，更新会话所有者
+        new_session_id = None
+        if session_id:
+            try:
+                # 获取原始匿名会话的消息
+                from app.memory.memory_manager import get_memory_manager
+                
+                memory_manager = await get_memory_manager()
+                messages = memory_manager.short_term.get_session_messages(session_id, "anonymous_user")
+                
+                if messages:
+                    # 创建一个新会话，归属于选中的用户
+                    new_session_id = await memory_manager.start_new_session(str(user["_id"]))
+                    
+                    # 将消息迁移到新会话
+                    for msg in reversed(messages):  # 从旧到新迁移消息
+                        await memory_manager.add_message(
+                            new_session_id, 
+                            str(user["_id"]), 
+                            msg.get("role", "user"), 
+                            msg.get("content", ""),
+                            msg.get("roleid"),
+                            msg.get("message_id")
+                        )
+            except Exception as e:
+                logging.error(f"会话迁移失败: {str(e)}", exc_info=True)
+                # 即使迁移失败也继续处理，允许用户选择
         
-        # 调用会话结束函数，生成摘要
-        result = await memory_manager.end_session(session_id, user_id)
-        
-        return {
-            "success": True,
-            "archived_messages_count": archived_count,
-            "total_messages": message_count,
-            "summary": result.get("summary", ""),
-            "session_id": session_id
+        # 返回用户信息和令牌
+        response_data = {
+            "success": True, 
+            "access_token": access_token, 
+            "token_type": "bearer",
+            "user_id": str(user["_id"]),
+            "name": user.get("name", "")
         }
+        
+        # 如果有新会话ID，添加到响应中
+        if new_session_id:
+            response_data["session_id"] = new_session_id
+        
+        logging.info(f"用户选择成功: {response_data['user_id']}")
+        return response_data
+    except HTTPException:
+        raise
     except Exception as e:
-        logging.error(f"结束并归档会话失败: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"结束并归档会话失败: {str(e)}")
-
-# 导入会话路由
-try:
-    from app.api.session_routes import router as session_router
-    # 将前缀设置为/api/sessions以符合前端调用
-    app.include_router(session_router, prefix="/api")
-    logging.info("会话管理路由已加载")
-except ImportError as e:
-    logging.error(f"无法导入会话管理路由: {str(e)}")
+        logging.error(f"用户选择失败: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"用户选择失败: {str(e)}")
 
 # 导入记忆模块路由
 try:
     from app.api.endpoints.memory import router as memory_router
-    app.include_router(memory_router, prefix="/api")
+    app.include_router(memory_router)
     logging.info("记忆管理路由已加载")
 except ImportError as e:
     logging.error(f"无法导入记忆管理路由: {str(e)}")
@@ -324,4 +374,67 @@ async def root():
 @app.get("/health")
 async def health_check():
     """健康检查端点"""
-    return {"status": "ok"} 
+    return {"status": "ok"}
+
+@app.get("/api/routes/test")
+async def test_routes():
+    """测试所有API路由的可用性"""
+    # 检查已注册的路由
+    routes = []
+    for route in app.routes:
+        if hasattr(route, "path") and "/api/" in route.path:
+            method = "GET"
+            if hasattr(route, "methods"):
+                method = list(route.methods)[0] if route.methods else "GET"
+            routes.append({"path": route.path, "method": method})
+    
+    return {
+        "status": "ok",
+        "routes": routes,
+        "total_routes": len(routes),
+        "timestamp": datetime.now().isoformat()
+    }
+
+# 添加一个HTTP请求日志记录中间件，帮助调试路由问题
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    """记录每个HTTP请求的详细信息，帮助调试404错误"""
+    start_time = time.time()
+    path = request.url.path
+    method = request.method
+    
+    # 记录请求详情
+    logging.info(f"请求开始: {method} {path}")
+    
+    # 如果是API请求，记录更多详情
+    if path.startswith("/api/"):
+        # 记录注册路由信息
+        routes_info = []
+        for route in app.routes:
+            if hasattr(route, "path"):
+                route_methods = list(getattr(route, "methods", ["GET"]))
+                if route_methods and method in route_methods:
+                    routes_info.append(f"{route.path} [{','.join(route_methods)}]")
+        
+        if routes_info:
+            logging.info(f"可能匹配的路由: {routes_info}")
+    
+    # 执行请求
+    response = await call_next(request)
+    
+    # 计算处理时间并记录响应状态
+    process_time = time.time() - start_time
+    logging.info(f"请求完成: {method} {path} - 状态: {response.status_code} - 处理时间: {process_time:.4f}秒")
+    
+    # 如果是404错误，记录更多信息帮助调试
+    if response.status_code == 404 and path.startswith("/api/"):
+        logging.warning(f"404 NOT FOUND: {method} {path}")
+        # 记录所有API路由，帮助判断是否有拼写错误
+        api_routes = []
+        for route in app.routes:
+            if hasattr(route, "path") and "/api/" in route.path:
+                api_routes.append(f"{route.path} [{','.join(getattr(route, 'methods', ['GET']))}]")
+        logging.warning(f"全部API路由: {api_routes}")
+    
+    response.headers["X-Process-Time"] = str(process_time)
+    return response 

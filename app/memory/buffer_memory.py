@@ -9,6 +9,8 @@ import logging
 from app.memory.schemas import Message, ChatSession
 from app.config import memory_settings
 from typing import Dict
+import os
+import uuid
 
 logger = logging.getLogger(__name__)
 
@@ -118,9 +120,9 @@ class ShortTermMemory:
                             cursor = db.roles.find({}).limit(5)
                             sample_roles = await cursor.to_list(length=5)
                             sample_info = [{"_id": str(r["_id"]), "name": r.get("name", "无名称")} for r in sample_roles] if sample_roles else []
-                            logger.info(f"数据库中的样例角色: {sample_info}")
+                            logger.debug(f"数据库中的样例角色: {sample_info}")
                         except Exception as sample_error:
-                            logger.error(f"获取样例角色失败: {str(sample_error)}")
+                            logger.debug(f"获取样例角色失败: {str(sample_error)}")
                     
                     return role_info
                 else:
@@ -183,7 +185,7 @@ class ShortTermMemory:
             logger.error(f"获取用户信息失败: {str(error)}", exc_info=True)
             return None
 
-    async def add_message(self, session_id: str, user_id: str, role: str, content: str, role_id: str = None) -> tuple:
+    async def add_message(self, session_id: str, user_id: str, role: str, content: str, role_id: str = None, message_id: str = None) -> tuple:
         """
         添加消息到会话
         
@@ -193,6 +195,7 @@ class ShortTermMemory:
             role: 消息角色（user/assistant/system）
             content: 消息内容
             role_id: 角色ID，对应MongoDB roles表中的_id
+            message_id: 消息ID，如果不提供则自动生成
             
         Returns:
             (bool, dict): 添加是否成功，以及可能需要归档的消息
@@ -227,6 +230,15 @@ class ShortTermMemory:
             message_dict = message.dict()
             logger.info(f"【role跟踪】序列化前 - role='{message_dict.get('role')}', roleid='{message_dict.get('roleid')}'")
             
+            # 设置消息ID
+            if message_id:
+                message_dict["message_id"] = message_id
+                logger.info(f"使用提供的消息ID: {message_id}")
+            else:
+                # 生成一个唯一的消息ID
+                message_dict["message_id"] = f"msg_{uuid.uuid4()}"
+                logger.info(f"生成新的消息ID: {message_dict['message_id']}")
+            
             # 如果角色是"user"，尝试处理用户名称
             if original_role == "user":
                 # 先检查是否为anonymous_user，如果是则尝试使用会话中存储的selected_username
@@ -240,10 +252,15 @@ class ShortTermMemory:
                             message_dict["role"] = selected_username
                             logger.info(f"【role跟踪】用户名称替换 - 从'{original_role}'到'{selected_username}'")
                         else:
-                            logger.info("会话中没有存储选中的用户名称")
-                            # 继续正常的用户信息获取流程
+                            logger.error("会话中没有选中的用户名称，但用户是匿名用户")
+                            # 抛出异常，强制客户端选择用户名
+                            raise ValueError("未选择用户，请先选择一个用户名再发送消息")
+                    except ValueError:
+                        # 重新抛出明确的错误
+                        raise
                     except Exception as e:
                         logger.error(f"获取会话选中用户名称失败: {str(e)}")
+                        raise ValueError("处理用户信息失败，请重新选择用户名再尝试")
                 
                 # 如果上面的处理没有替换角色名称，尝试从MongoDB获取用户信息
                 if message_dict["role"] == original_role:
@@ -373,7 +390,7 @@ class ShortTermMemory:
             logger.info(f"【role跟踪】处理消息异常：{str(e)}")
             return False, None
             
-    async def add_message_with_retry(self, session_id: str, user_id: str, role: str, content: str, role_id: str = None, max_retries=3) -> tuple:
+    async def add_message_with_retry(self, session_id: str, user_id: str, role: str, content: str, role_id: str = None, message_id: str = None, max_retries=3) -> tuple:
         """
         添加消息到会话，带重试机制
         
@@ -382,16 +399,37 @@ class ShortTermMemory:
             user_id: 用户ID
             role: 消息角色
             content: 消息内容
-            role_id: 角色ID（可选）
+            role_id: 角色ID
+            message_id: 消息ID
             max_retries: 最大重试次数
             
         Returns:
             (bool, dict): 添加是否成功，以及可能需要归档的消息
         """
+        # 初始化
         retries = 0
-        while retries < max_retries:
+        result = False
+        message = None
+        
+        # 重试循环
+        while retries < max_retries and not result:
+            if retries > 0:
+                logger.info(f"正在尝试第{retries+1}次添加消息...")
+                
             try:
-                return await self.add_message(session_id, user_id, role, content, role_id)
+                result, message = await self.add_message(
+                    session_id=session_id,
+                    user_id=user_id,
+                    role=role,
+                    content=content,
+                    role_id=role_id,
+                    message_id=message_id
+                )
+                
+                if result:
+                    logger.info(f"成功添加消息，尝试次数: {retries+1}")
+                    break
+                    
             except redis.ConnectionError as e:
                 retries += 1
                 logger.warning(f"Redis连接错误，尝试重新连接 ({retries}/{max_retries}): {str(e)}")
@@ -399,9 +437,9 @@ class ShortTermMemory:
                 # 尝试重新初始化连接
                 try:
                     self.redis = redis.Redis(
-                        host=memory_settings.REDIS_HOST,
-                        port=memory_settings.REDIS_PORT,
-                        password=memory_settings.REDIS_PASSWORD,
+                        host=os.getenv("REDIS_HOST", "localhost"),
+                        port=int(os.getenv("REDIS_PORT", "6378")),
+                        password=os.getenv("REDIS_PASSWORD", "!qaz2wsX"),
                         decode_responses=True
                     )
                     # 测试连接

@@ -7,7 +7,7 @@ import logging
 
 from app.services.role_service import RoleService
 from app.models.role import Role
-from app.db.mongodb import get_db
+from app.database.mongodb import get_db
 from app.services.role_matching_service import role_matching_service
 from app.services.embedding_service import embedding_service
 

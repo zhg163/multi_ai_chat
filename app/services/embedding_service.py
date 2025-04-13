@@ -75,7 +75,7 @@ class EmbeddingService:
         """预计算所有角色的向量表示"""
         try:
             # 获取数据库连接
-            from app.db.mongodb import get_db
+            from app.database.mongodb import get_db
             db = await get_db()
             
             # 获取所有活跃角色

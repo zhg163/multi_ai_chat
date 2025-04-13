@@ -15,7 +15,12 @@ from datetime import datetime
 
 # 导入auth模块
 from app.auth.auth_bearer import JWTBearer
-from app.auth.auth_handler import get_current_user
+from app.auth.auth_handler import get_current_user, get_current_user_optional
+
+# 导入角色服务
+from app.services.role_service import RoleService
+# 导入默认角色配置
+from app.config.defaults import DEFAULT_ROLES
 
 logger = logging.getLogger(__name__)
 
@@ -29,17 +34,82 @@ class StreamMessageRequest(BaseModel):
     role_id: Optional[str] = Field(None, description="角色ID，如不提供则自动选择")
     temperature: Optional[float] = Field(0.7, description="生成温度参数")
 
-# 模拟角色数据
-MOCK_ROLES = {
-    "role_id_1": {"name": "助手", "description": "通用助手角色"},
-    "role_id_2": {"name": "专家", "description": "专业知识专家"},
-    "role_id_3": {"name": "诗人", "description": "富有创造力的诗人"}
-}
+class MessageRequest(BaseModel):
+    content: str = Field(..., description="用户消息内容")
+    session_id: str = Field(..., description="会话ID")
+    role_id: Optional[str] = Field(None, description="角色ID")
+    
+@router.post("")
+async def process_message(
+    request: MessageRequest,
+    current_user: Optional[Dict[str, Any]] = Depends(get_current_user_optional)
+):
+    """
+    处理用户消息 - 将请求转发到stream端点
+    """
+    try:
+        logger.info(f"收到消息处理请求: {request.content[:30]}...")
+        
+        # 构建StreamMessageRequest
+        stream_request = StreamMessageRequest(
+            content=request.content,
+            session_id=request.session_id,
+            role_id=request.role_id,
+            temperature=0.7  # 使用默认温度
+        )
+        
+        # 重用stream_message的逻辑
+        from app.memory.memory_manager import get_memory_manager
+        memory_manager = await get_memory_manager()
+        
+        # 记录用户消息
+        user_id = current_user.get("id", "anonymous_user") if current_user else "anonymous_user"
+        await memory_manager.add_message(
+            request.session_id,
+            user_id,
+            "user",
+            request.content,
+            role_id=request.role_id
+        )
+        
+        # 使用角色生成响应
+        role_id = request.role_id or "role_id_1"  # 默认使用助手角色
+        role = DEFAULT_ROLES.get(role_id, DEFAULT_ROLES["default"])
+        role_name = role["name"]
+        
+        # 生成回复内容
+        responses = {
+            "role_id_1": f"我是{role_name}，很高兴为您服务！您问的是\"{request.content}\"，这是一个很好的问题。让我来详细回答...",
+            "role_id_2": f"作为{role_name}，我可以专业地解答您关于\"{request.content}\"的问题。从技术角度来看...",
+            "role_id_3": f"灵感闪现，{role_name}为您作答：\n关于\"{request.content}\"\n思绪万千如细雨落下..."
+        }
+        
+        response_content = responses.get(role_id, responses["role_id_1"])
+        
+        # 记录AI回复
+        message_id = f"msg_{datetime.now().timestamp()}"
+        await memory_manager.add_message(
+            request.session_id,
+            user_id,
+            "assistant",
+            response_content,
+            role_id=role_id,
+            message_id=message_id
+        )
+        
+        return {
+            "content": response_content,
+            "message_id": message_id,
+            "role_id": role_id
+        }
+    except Exception as e:
+        logger.error(f"处理消息失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"处理消息失败: {str(e)}")
 
 @router.post("/stream")
 async def stream_message(
     request: StreamMessageRequest,
-    current_user: Dict[str, Any] = Depends(get_current_user)
+    current_user: Optional[Dict[str, Any]] = Depends(get_current_user_optional)
 ):
     """
     流式生成AI回复 - 简化演示版
@@ -54,7 +124,10 @@ async def stream_message(
             
             # 获取角色信息
             role_id = request.role_id or "role_id_1"  # 默认使用助手角色
-            role_name = MOCK_ROLES.get(role_id, {"name": "AI助手"})["name"]
+            
+            # 获取角色名称 - 从配置获取，不再使用硬编码
+            role = DEFAULT_ROLES.get(role_id, DEFAULT_ROLES["default"])
+            role_name = role["name"]
             
             # 发送开始信号
             yield json.dumps({

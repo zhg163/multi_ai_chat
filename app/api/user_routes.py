@@ -1,11 +1,15 @@
 from typing import List, Dict, Any, Optional
-from fastapi import APIRouter, HTTPException, Depends, Query, Path, status
+from fastapi import APIRouter, HTTPException, Depends, Query, Path, status, Body, Request
 from pydantic import BaseModel, Field, ConfigDict
 from bson import ObjectId
 import traceback
 import logging
+from datetime import datetime, timedelta
 
-from app.db.mongodb import get_db
+from app.database.mongodb import get_db
+from app.services.fallback_service import FallbackService
+from app.auth.auth_handler import create_access_token
+from app.memory.memory_manager import get_memory_manager
 
 # 配置日志
 logger = logging.getLogger(__name__)
@@ -71,17 +75,17 @@ async def list_users(
         if db is None:
             logger.error("数据库连接失败: db对象为None")
             # 返回空列表而不是错误，这样前端仍然可以显示
-            return []
+            return FallbackService.get_sample_users()
             
         # 检查users集合是否存在
         try:
             if not hasattr(db, 'users'):
                 # 创建一个用户集合
                 logger.warning("数据库中未找到users集合，将返回内存中的示例用户")
-                return _get_sample_users()
+                return FallbackService.get_sample_users()
         except Exception as e:
             logger.error(f"检查users集合时出错: {str(e)}")
-            return _get_sample_users()
+            return FallbackService.get_sample_users()
             
         query = {}
         if is_active is not None:
@@ -95,13 +99,13 @@ async def list_users(
             users_list = await cursor.to_list(length=limit)
         except Exception as e:
             logger.error(f"查询用户数据时出错: {str(e)}")
-            return _get_sample_users()
+            return FallbackService.get_sample_users()
         
         # 如果没有用户数据，添加一些示例用户
         if len(users_list) == 0:
             logger.info("No users found, creating sample users")
             try:
-                sample_users = _get_sample_users(as_dict=True)
+                sample_users = FallbackService.get_sample_users(as_dict=True)
                 
                 # 将示例用户添加到数据库
                 result = await db.users.insert_many(sample_users)
@@ -111,7 +115,7 @@ async def list_users(
                 users_list = await cursor.to_list(length=limit)
             except Exception as e:
                 logger.error(f"插入示例用户时出错: {str(e)}")
-                return _get_sample_users()
+                return FallbackService.get_sample_users()
         
         # 处理ObjectId - 重命名_id为id
         result_users = []
@@ -127,51 +131,7 @@ async def list_users(
         logger.error(f"Error fetching users: {str(e)}")
         logger.error(traceback.format_exc())
         # 返回示例用户而不是抛出异常
-        return _get_sample_users()
-
-def _get_sample_users(as_dict=False):
-    """返回示例用户数据，可以选择返回字典或对象"""
-    sample_users = [
-        {
-            "id": "507f1f77bcf86cd799439001" if not as_dict else None,
-            "name": "张三",
-            "username": "zhangsan",
-            "email": "zhang@example.com",
-            "avatar": "https://example.com/avatars/user1.png",
-            "description": "普通用户",
-            "tags": ["电影", "篮球"],
-            "is_active": True
-        },
-        {
-            "id": "507f1f77bcf86cd799439002" if not as_dict else None,
-            "name": "李四",
-            "username": "lisi",
-            "email": "li@example.com",
-            "avatar": "https://example.com/avatars/user2.png",
-            "description": "技术专家",
-            "tags": ["编程", "AI"],
-            "is_active": True
-        },
-        {
-            "id": "507f1f77bcf86cd799439003" if not as_dict else None,
-            "name": "王五",
-            "username": "wangwu",
-            "email": "wang@example.com",
-            "avatar": "https://example.com/avatars/user3.png",
-            "description": "文学爱好者",
-            "tags": ["阅读", "写作"],
-            "is_active": True
-        }
-    ]
-    
-    if as_dict:
-        # 为数据库插入准备的格式，没有id字段
-        return [
-            {k: v for k, v in user.items() if k != 'id'}
-            for user in sample_users
-        ]
-    
-    return sample_users
+        return FallbackService.get_sample_users()
 
 @router.get("/{user_id}", response_model=UserResponse)
 async def get_user(user_id: str, db=Depends(get_db)):
@@ -269,4 +229,87 @@ async def update_user(user_id: str, user_update: UserUpdate, db=Depends(get_db))
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"更新用户失败: {str(e)}"
-        ) 
+        )
+
+@router.post("/select-user")
+async def select_user_login(
+    request: Request,
+    user_data: Dict = Body(...)
+):
+    """选择用户并登录"""
+    try:
+        user_id = user_data.get("user_id")
+        session_id = user_data.get("session_id")
+        
+        if not user_id:
+            raise HTTPException(status_code=400, detail="缺少用户ID")
+            
+        # 验证用户是否存在
+        from app.database.connection import get_database
+        from bson.objectid import ObjectId
+        
+        db = await get_database()
+        if db is None:
+            raise HTTPException(status_code=500, detail="数据库连接失败")
+            
+        try:
+            user = await db.users.find_one({"_id": ObjectId(user_id)})
+        except Exception as e:
+            logger.error(f"查询用户时出错: {str(e)}")
+            raise HTTPException(status_code=400, detail="无效的用户ID格式")
+            
+        if not user:
+            raise HTTPException(status_code=404, detail="用户不存在")
+            
+        # 生成访问令牌
+        expires_delta = timedelta(days=7)
+        access_token = create_access_token(
+            data={"sub": str(user["_id"])},
+            expires_delta=expires_delta
+        )
+        
+        # 如果提供了会话ID，更新会话所有者
+        new_session_id = None
+        if session_id:
+            try:
+                # 获取原始匿名会话的消息
+                memory_manager = await get_memory_manager()
+                messages = memory_manager.short_term.get_session_messages(session_id, "anonymous_user")
+                
+                if messages:
+                    # 创建一个新会话，归属于选中的用户
+                    new_session_id = await memory_manager.start_new_session(str(user["_id"]))
+                    
+                    # 将消息迁移到新会话
+                    for msg in reversed(messages):  # 从旧到新迁移消息
+                        await memory_manager.add_message(
+                            new_session_id, 
+                            str(user["_id"]), 
+                            msg.get("role", "user"), 
+                            msg.get("content", ""),
+                            msg.get("roleid"),
+                            msg.get("message_id")
+                        )
+            except Exception as e:
+                logger.error(f"会话迁移失败: {str(e)}")
+                # 即使迁移失败也继续处理，允许用户选择
+        
+        # 返回用户信息和令牌
+        response_data = {
+            "success": True, 
+            "access_token": access_token, 
+            "token_type": "bearer",
+            "user_id": str(user["_id"]),
+            "name": user.get("name", "")
+        }
+        
+        # 如果有新会话ID，添加到响应中
+        if new_session_id:
+            response_data["session_id"] = new_session_id
+            
+        return response_data
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"用户选择失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"用户选择失败: {str(e)}") 

@@ -1,148 +1,175 @@
-"""
-JWT认证处理
-
-提供JWT令牌编码和解码功能
-"""
-
-import os
-import time
-import jwt
+import os, jwt, time
+import json
+import logging
+from datetime import datetime, timedelta
 from typing import Dict, Optional
-from fastapi import Depends, HTTPException, status, Request
+
+from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from fastapi.security.utils import get_authorization_scheme_param
+
+# 创建日志记录器
+logger = logging.getLogger(__name__)
 
 # JWT配置
-JWT_SECRET = os.getenv("JWT_SECRET", "demo_secret_key")  # 实际生产中应使用环境变量
+JWT_SECRET = os.getenv("JWT_SECRET", "demo_secret_key")
 JWT_ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
-JWT_EXPIRES_SECONDS = int(os.getenv("JWT_EXPIRES_SECONDS", "3600"))  # 1小时
+JWT_EXPIRES_SECONDS = int(os.getenv("JWT_EXPIRES_SECONDS", "3600"))
 
-# 认证处理器
-jwt_bearer = HTTPBearer()
+# 创建安全依赖
+security = HTTPBearer(auto_error=False)
 
-# 可选认证处理器
-class OptionalHTTPBearer(HTTPBearer):
-    def __init__(self, auto_error: bool = False):
-        super(OptionalHTTPBearer, self).__init__(auto_error=auto_error)
-        
-    async def __call__(self, request: Request) -> Optional[HTTPAuthorizationCredentials]:
-        authorization = request.headers.get("Authorization")
-        scheme, credentials = get_authorization_scheme_param(authorization)
-        
-        if not authorization or scheme.lower() != "bearer":
-            if self.auto_error:
-                raise HTTPException(
-                    status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail="Not authenticated",
-                    headers={"WWW-Authenticate": "Bearer"},
-                )
-            else:
-                return None
-                
-        return HTTPAuthorizationCredentials(scheme=scheme, credentials=credentials)
-
-# 创建可选认证处理器实例
-optional_jwt_bearer = OptionalHTTPBearer(auto_error=False)
-
-def sign_token(user_id: str, username: str) -> str:
-    """
-    生成JWT令牌
-    
-    Args:
-        user_id: 用户ID
-        username: 用户名
-        
-    Returns:
-        JWT令牌
-    """
-    payload = {
-        "user_id": user_id,
-        "username": username,
-        "exp": time.time() + JWT_EXPIRES_SECONDS,
-        "iat": time.time()
-    }
-    
-    return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
+def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
+    to_encode = data.copy()
+    if expires_delta:
+        expire = datetime.utcnow() + expires_delta
+    else:
+        expire = datetime.utcnow() + timedelta(seconds=JWT_EXPIRES_SECONDS)
+    to_encode.update({"exp": expire})
+    encoded_jwt = jwt.encode(to_encode, JWT_SECRET, algorithm=JWT_ALGORITHM)
+    return encoded_jwt
 
 def decode_token(token: str) -> Dict:
     """
-    解码JWT令牌
+    解码并验证JWT令牌
     
     Args:
-        token: JWT令牌
+        token: JWT令牌字符串
         
     Returns:
-        解码后的数据
+        解码后的令牌数据字典
+        
+    Raises:
+        jwt.PyJWTError: 当令牌无效或过期时
     """
     try:
-        decoded_token = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
-        if decoded_token["exp"] < time.time():
-            raise HTTPException(status_code=401, detail="Token expired")
-        return {
-            "id": decoded_token["user_id"], 
-            "username": decoded_token["username"]
-        }
-    except jwt.PyJWTError:
-        raise HTTPException(status_code=401, detail="Invalid token")
-
-async def get_current_user(token=Depends(jwt_bearer)):
-    """
-    获取当前用户
-    
-    Args:
-        token: JWT令牌（通过依赖注入获取）
+        # 打印收到的原始token
+        logger.info(f"auth_handler收到的token: {token[:10]}...{token[-10:] if len(token) > 20 else token}")
         
-    Returns:
-        当前用户信息
-    """
-    # 演示模式
-    if isinstance(token, dict) and token.get("id") == "demo_user_id":
-        return token
+        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
         
-    # 正常模式
-    try:
-        payload = decode_token(token.credentials)
+        # 打印完整的解码后用户信息
+        logger.info(f"============用户信息开始============")
+        logger.info(f"auth_handler解码后的完整用户信息: {json.dumps(payload, ensure_ascii=False, indent=2)}")
+        
+        # 打印常见关键字段
+        if "sub" in payload:
+            logger.info(f"用户ID (sub): {payload['sub']}")
+        if "username" in payload:
+            logger.info(f"用户名 (username): {payload['username']}")
+        if "name" in payload:
+            logger.info(f"显示名称 (name): {payload['name']}")
+        if "role" in payload:
+            logger.info(f"角色 (role): {payload['role']}")
+        if "exp" in payload:
+            exp_time = datetime.fromtimestamp(payload["exp"])
+            logger.info(f"过期时间 (exp): {exp_time.strftime('%Y-%m-%d %H:%M:%S')}")
+            
+        # 打印其他字段
+        for key, value in payload.items():
+            if key not in ["sub", "username", "name", "role", "exp"]:
+                logger.info(f"其他字段 - {key}: {value}")
+        
+        logger.info(f"============用户信息结束============")
+        
         return payload
+    except jwt.ExpiredSignatureError:
+        # 令牌已过期
+        logger.error("令牌已过期")
+        raise jwt.PyJWTError("令牌已过期")
+    except jwt.InvalidTokenError as e:
+        # 令牌无效
+        logger.error(f"无效的令牌: {str(e)}")
+        raise jwt.PyJWTError("无效的令牌")
     except Exception as e:
+        # 其他异常
+        logger.error(f"解码令牌时发生未知错误: {str(e)}")
+        raise jwt.PyJWTError(f"令牌处理错误: {str(e)}")
+
+async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)):
+    """
+    从HTTP请求中提取并验证JWT令牌，返回当前用户信息
+    
+    Args:
+        credentials: 从HTTP请求头中提取的Authorization凭证
+        
+    Returns:
+        当前用户信息字典
+        
+    Raises:
+        HTTPException: 当身份验证失败时
+    """
+    if credentials is None:
+        # 为开发环境提供一个默认用户，生产环境应该删除这部分
+        return {
+            "user_id": "default_user_id",
+            "username": "default_user",
+            "role": "user",
+            "is_temporary": True
+        }
+    
+    try:
+        token = credentials.credentials
+        payload = decode_token(token)
+        
+        # 检查令牌是否包含必要信息
+        if "sub" not in payload:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="无效的身份认证凭据",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        
+        return {
+            "user_id": payload.get("sub"),
+            "username": payload.get("username", ""),
+            "role": payload.get("role", "user"),
+            "exp": payload.get("exp", 0)
+        }
+        
+    except jwt.PyJWTError as e:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=f"Could not validate credentials: {str(e)}",
+            detail=f"身份认证失败: {str(e)}",
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-async def get_current_user_optional(token=Depends(optional_jwt_bearer)):
+async def get_current_user_optional(credentials: HTTPAuthorizationCredentials = Depends(security)):
     """
-    获取当前用户（可选认证）
-    
-    与get_current_user不同，认证失败时不会抛出异常，而是返回默认匿名用户或None
+    从HTTP请求中提取并验证JWT令牌，返回当前用户信息，如果验证失败则返回None
     
     Args:
-        token: JWT令牌（通过依赖注入获取，可选）
+        credentials: 从HTTP请求头中提取的Authorization凭证
         
     Returns:
-        当前用户信息，认证失败时返回默认用户或None
+        当前用户信息字典，或者在验证失败时返回None
     """
-    if token is None:
-        # 返回默认匿名用户
+    if credentials is None:
+        # 没有提供凭证，返回开发环境的默认用户
         return {
-            "id": "anonymous_user",
-            "username": "anonymous",
-            "is_anonymous": True
+            "user_id": "default_user_id",
+            "username": "default_user",
+            "role": "user",
+            "is_temporary": True
+        }
+    
+    try:
+        token = credentials.credentials
+        payload = decode_token(token)
+        
+        # 检查令牌是否包含必要信息
+        if "sub" not in payload:
+            return None
+        
+        return {
+            "user_id": payload.get("sub"),
+            "username": payload.get("username", ""),
+            "role": payload.get("role", "user"),
+            "exp": payload.get("exp", 0)
         }
         
-    # 尝试解析令牌
-    try:
-        payload = decode_token(token.credentials)
-        return payload
-    except Exception as e:
-        # 出错时，记录日志但返回匿名用户
-        print(f"认证失败，但继续处理: {str(e)}")
-        return {
-            "id": "anonymous_user",
-            "username": "anonymous",
-            "is_anonymous": True
-        }
+    except jwt.PyJWTError:
+        # 令牌验证失败，返回None
+        return None
 
-# 添加 get_current_user_or_none 作为 get_current_user_optional 的别名
-# 某些模块可能使用此名称导入
-get_current_user_or_none = get_current_user_optional 
+# 为兼容性提供别名
+get_current_user_or_none = get_current_user_optional

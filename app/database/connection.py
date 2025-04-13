@@ -25,6 +25,20 @@ class Database:
     async def connect(cls, connection_string, db_name="multi_ai_chat"):
         """建立与MongoDB的连接"""
         try:
+            # 打印连接信息时隐藏密码
+            log_uri = connection_string
+            if "@" in connection_string and ":" in connection_string:
+                try:
+                    prefix, rest = connection_string.split("://", 1)
+                    auth_part, host_part = rest.split("@", 1)
+                    if ":" in auth_part:
+                        user, password = auth_part.split(":", 1)
+                        log_uri = f"{prefix}://{user}:******@{host_part}"
+                except Exception:
+                    pass
+            
+            logger.info(f"连接到MongoDB，URI={log_uri}, 数据库={db_name}")
+            
             # 设置连接超时和重试选项
             cls.client = motor.motor_asyncio.AsyncIOMotorClient(
                 connection_string,
@@ -36,10 +50,10 @@ class Database:
             # 测试连接
             await cls.client.admin.command('ping')
             cls.db = cls.client[db_name]
-            logger.info(f"Connected to MongoDB database: {db_name}")
+            logger.info(f"成功连接到MongoDB数据库: {db_name}")
             return cls.db
         except ConnectionFailure as e:
-            logger.error(f"MongoDB server not available: {str(e)}")
+            logger.error(f"MongoDB服务器不可用: {str(e)}")
             raise
         except Exception as e:
             logger.error(f"MongoDB连接异常: {str(e)}")
@@ -140,11 +154,76 @@ async def get_mongo_client() -> AsyncIOMotorClient:
     
     # 从环境变量获取连接信息
     mongo_uri = os.getenv("MONGODB_URL", os.getenv("MONGO_URI", "mongodb://localhost:27017"))
-    mongo_user = os.getenv("MONGODB_USERNAME", os.getenv("MONGO_USER", ""))
-    mongo_pass = os.getenv("MONGODB_PASSWORD", os.getenv("MONGO_PASSWORD", ""))
-    auth_source = os.getenv("MONGODB_AUTH_SOURCE", os.getenv("MONGO_AUTH_SOURCE", "admin"))
+    db_name = os.getenv("MONGODB_DATABASE", os.getenv("MONGO_DB", "multi_ai_chat"))
     
-    logger.info(f"MongoDB连接参数: URI={mongo_uri}, 用户={mongo_user}, 认证源={auth_source}")
+    # 如果URI中没有认证信息，尝试从环境变量添加
+    if "@" not in mongo_uri:
+        mongo_user = os.getenv("MONGODB_USERNAME", os.getenv("MONGO_USER", ""))
+        mongo_pass = os.getenv("MONGODB_PASSWORD", os.getenv("MONGO_PASSWORD", ""))
+        auth_source = os.getenv("MONGODB_AUTH_SOURCE", os.getenv("MONGO_AUTH_SOURCE", "admin"))
+        
+        # 如果有用户名和密码，构建带认证的URI
+        if mongo_user and mongo_pass:
+            # 解析原始URI
+            if "://" in mongo_uri:
+                protocol, rest = mongo_uri.split("://", 1)
+                if "/" in rest:
+                    host_port, db_part = rest.split("/", 1)
+                else:
+                    host_port = rest
+                    db_part = ""
+                
+                # 重构带认证信息的URI
+                mongo_uri = f"{protocol}://{mongo_user}:{mongo_pass}@{host_port}"
+                
+                # 确保添加数据库名称和authSource
+                if not db_part:
+                    mongo_uri += f"/{db_name}"
+                else:
+                    mongo_uri += f"/{db_part}"
+                
+                if "?" not in mongo_uri:
+                    mongo_uri += f"?authSource={auth_source}"
+                elif f"authSource=" not in mongo_uri:
+                    mongo_uri += f"&authSource={auth_source}"
+        
+        # 打印连接信息时隐藏密码
+        log_uri = mongo_uri
+        if mongo_pass and mongo_pass in log_uri:
+            log_uri = log_uri.replace(mongo_pass, "******")
+        logger.info(f"MongoDB连接参数: URI={log_uri}")
+    else:
+        # 确保URI中包含数据库名称
+        if "://" in mongo_uri:
+            protocol, rest = mongo_uri.split("://", 1)
+            if "@" in rest:
+                auth_part, remaining = rest.split("@", 1)
+                
+                # 检查是否已包含数据库名称
+                if "/" not in remaining or remaining.endswith("/"):
+                    # 没有数据库名称或只有"/"，添加数据库名称
+                    if "/" not in remaining:
+                        mongo_uri = f"{protocol}://{auth_part}@{remaining}/{db_name}"
+                    else:
+                        mongo_uri = f"{protocol}://{auth_part}@{remaining}{db_name}"
+                elif "?" in remaining and remaining.split("?")[0].count("/") == 0:
+                    # URI中有选项但没有数据库名称
+                    host_part, options = remaining.split("?", 1)
+                    mongo_uri = f"{protocol}://{auth_part}@{host_part}/{db_name}?{options}"
+            
+        # 打印连接信息时隐藏密码
+        log_uri = mongo_uri
+        if ":" in mongo_uri and "@" in mongo_uri:
+            try:
+                prefix, rest = mongo_uri.split("://", 1)
+                if "@" in rest:
+                    auth_part, host_part = rest.split("@", 1)
+                    if ":" in auth_part:
+                        user, password = auth_part.split(":", 1)
+                        log_uri = f"{prefix}://{user}:******@{host_part}"
+            except Exception:
+                pass
+        logger.info(f"MongoDB连接参数: URI={log_uri}")
     
     # 尝试连接，带重试
     retries = 0
@@ -154,20 +233,15 @@ async def get_mongo_client() -> AsyncIOMotorClient:
         try:
             logger.info(f"正在连接MongoDB (尝试 {retries+1}/{MAX_RETRIES})...")
             
-            # 使用AsyncIOMotorClient直接提供认证信息，而不是修改URI
+            # 设置连接选项
             client_options = {
                 "serverSelectionTimeoutMS": 5000,
                 "connectTimeoutMS": 5000,
-                "socketTimeoutMS": 5000
+                "socketTimeoutMS": 5000,
+                "retryWrites": True
             }
             
-            # 只有当用户名和密码都存在时才添加认证信息
-            if mongo_user and mongo_pass:
-                client_options["username"] = mongo_user
-                client_options["password"] = mongo_pass
-                client_options["authSource"] = auth_source
-                logger.info(f"使用认证信息连接: user={mongo_user}, authSource={auth_source}")
-            
+            # 创建客户端并连接 - 不再单独传递认证信息，使用URI中的认证
             client = AsyncIOMotorClient(mongo_uri, **client_options)
             
             # 验证连接
@@ -184,17 +258,9 @@ async def get_mongo_client() -> AsyncIOMotorClient:
             
             # 检查错误类型并提供更详细的日志
             if "Authentication failed" in error_msg:
-                logger.error(f"MongoDB认证失败，请检查用户名、密码和认证源: {error_msg}")
-                logger.info(f"认证详情: 用户={mongo_user}, 认证源={auth_source}")
-                # 尝试不同的认证源
-                if auth_source != "admin" and retries == 1:
-                    auth_source = "admin"
-                    logger.info(f"尝试使用默认认证源 'admin' 重新连接")
-                    continue
+                logger.error(f"MongoDB认证失败，请检查用户名和密码: {error_msg}")
             elif "requires authentication" in error_msg:
                 logger.error(f"MongoDB需要认证: {error_msg}")
-                if not mongo_user or not mongo_pass:
-                    logger.error("未提供MongoDB用户名或密码，请检查环境变量配置")
             
             if retries < MAX_RETRIES:
                 logger.warning(f"MongoDB连接失败 (尝试 {retries}/{MAX_RETRIES}): {error_msg}. 将在 {RETRY_DELAY} 秒后重试...")

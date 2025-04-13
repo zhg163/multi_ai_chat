@@ -16,7 +16,6 @@ from app.config import memory_settings
 from app.types import JsonObject
 from app.memory.memory_manager import get_memory_manager
 import redis
-import os
 
 router = APIRouter(prefix="/api/test", tags=["test"])
 logger = logging.getLogger(__name__)
@@ -99,9 +98,9 @@ async def add_test_message(
         
         # 创建Redis客户端
         redis_client = redis.Redis(
-            host=os.getenv("REDIS_HOST", "localhost"),
-            port=int(os.getenv("REDIS_PORT", "6378")),
-            password=os.getenv("REDIS_PASSWORD", "!qaz2wsX"),
+            host=memory_settings.REDIS_HOST,
+            port=memory_settings.REDIS_PORT,
+            password=memory_settings.REDIS_PASSWORD,
             decode_responses=True
         )
         
@@ -193,13 +192,14 @@ async def check_message_roles(
     """检查Redis中的消息角色名称是否正确设置为中文名称"""
     from app.memory.buffer_memory import ShortTermMemory
     import redis
+    from app.config import memory_settings
     
     try:
         # 创建Redis客户端
         redis_client = redis.Redis(
-            host=os.getenv("REDIS_HOST", "localhost"),
-            port=int(os.getenv("REDIS_PORT", "6378")),
-            password=os.getenv("REDIS_PASSWORD", "!qaz2wsX"),
+            host=memory_settings.REDIS_HOST,
+            port=memory_settings.REDIS_PORT,
+            password=memory_settings.REDIS_PASSWORD,
             decode_responses=True
         )
         

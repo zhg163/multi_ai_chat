@@ -10,9 +10,8 @@ from ..auth.auth_handler import get_current_user, get_current_user_or_none
 from ..models.user import User
 
 router = APIRouter(
-    prefix="/sessions",
-    tags=["sessions"],
-    dependencies=[Depends(JWTBearer())]
+    prefix="/api/sessions",
+    tags=["sessions"]
 )
 
 # 数据模型
@@ -90,19 +89,28 @@ async def create_session(
 async def list_sessions(
     limit: int = Query(20, ge=1, le=100),
     offset: int = Query(0, ge=0),
+    skip: Optional[int] = Query(None, ge=0, description="别名，与offset参数相同"),
     status: Optional[str] = Query("active", description="会话状态: active, archived, 或 null 获取所有状态"),
-    current_user: User = Depends(get_current_user)
+    current_user: Optional[User] = Depends(get_current_user_or_none)
 ):
     """获取会话列表"""
     try:
+        # 处理未认证用户
+        if not current_user:
+            # 返回空列表或示例会话
+            return []
+            
         # 处理传入null字符串的情况
         if status == "null":
             status = None
             
+        # 使用skip参数值（如果提供）作为offset
+        final_offset = skip if skip is not None else offset
+            
         sessions = await SessionService.list_sessions(
             current_user["id"],
             limit=limit,
-            offset=offset,
+            offset=final_offset,
             status=status
         )
         
@@ -209,11 +217,29 @@ async def update_session_settings(
 @router.post("/{session_id}/archive", response_model=dict)
 async def archive_session(
     session_id: str = Path(..., title="会话ID"),
-    current_user: User = Depends(get_current_user)
+    current_user: Optional[User] = Depends(get_current_user_or_none)
 ):
     """归档会话"""
     try:
-        success = await SessionService.archive_session(session_id, current_user["id"])
+        # 使用默认用户ID（如果未认证）
+        user_id = current_user["id"] if current_user else "anonymous_user"
+        success = await SessionService.archive_session(session_id, user_id)
+        return {"success": success}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"归档会话失败: {str(e)}")
+
+@router.put("/{session_id}/archive", response_model=dict)
+async def archive_session_put(
+    session_id: str = Path(..., title="会话ID"),
+    current_user: Optional[User] = Depends(get_current_user_or_none)
+):
+    """归档会话 (PUT方法)"""
+    try:
+        # 使用默认用户ID（如果未认证）
+        user_id = current_user["id"] if current_user else "anonymous_user"
+        success = await SessionService.archive_session(session_id, user_id)
         return {"success": success}
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -223,11 +249,29 @@ async def archive_session(
 @router.post("/{session_id}/restore", response_model=dict)
 async def restore_session(
     session_id: str = Path(..., title="会话ID"),
-    current_user: User = Depends(get_current_user)
+    current_user: Optional[User] = Depends(get_current_user_or_none)
 ):
     """恢复已归档会话"""
     try:
-        success = await SessionService.restore_session(session_id, current_user["id"])
+        # 使用默认用户ID（如果未认证）
+        user_id = current_user["id"] if current_user else "anonymous_user"
+        success = await SessionService.restore_session(session_id, user_id)
+        return {"success": success}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"恢复会话失败: {str(e)}")
+
+@router.put("/{session_id}/restore", response_model=dict)
+async def restore_session_put(
+    session_id: str = Path(..., title="会话ID"),
+    current_user: Optional[User] = Depends(get_current_user_or_none)
+):
+    """恢复已归档会话 (PUT方法)"""
+    try:
+        # 使用默认用户ID（如果未认证）
+        user_id = current_user["id"] if current_user else "anonymous_user"
+        success = await SessionService.restore_session(session_id, user_id)
         return {"success": success}
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))

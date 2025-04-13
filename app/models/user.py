@@ -1,6 +1,9 @@
 from datetime import datetime
-from bson.objectid import ObjectId
+from bson import ObjectId
+from typing import Dict, Any, List, Optional
+
 from app.database.connection import Database
+from app.database.fallback import MockCollection
 
 class User:
     collection = None

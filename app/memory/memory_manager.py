@@ -13,6 +13,7 @@ from app.services.session_service import SessionService
 from app.memory.schemas import SessionResponse, MemoryContext
 from app.models.session import SessionStatus
 from app.config import memory_settings
+import os
 
 logger = logging.getLogger(__name__)
 
@@ -30,23 +31,29 @@ class MemoryManager:
                 import redis
                 from app.config import memory_settings
                 
+                # 从环境变量或内存设置中获取配置
+                redis_host = os.getenv("REDIS_HOST", "localhost")
+                redis_port = int(os.getenv("REDIS_PORT", "6378"))
+                redis_password = os.getenv("REDIS_PASSWORD", "!qaz2wsX")
+                max_chat_rounds = int(os.getenv("MAX_CHAT_ROUNDS", "2"))
+                
                 redis_client = redis.Redis(
-                    host=memory_settings.REDIS_HOST,
-                    port=memory_settings.REDIS_PORT,
-                    password=memory_settings.REDIS_PASSWORD,
+                    host=redis_host,
+                    port=redis_port,
+                    password=redis_password,
                     decode_responses=True
                 )
                 
                 # 测试Redis连接
                 try:
                     redis_client.ping()
-                    logger.info(f"成功连接到Redis服务器: {memory_settings.REDIS_HOST}:{memory_settings.REDIS_PORT}")
+                    logger.info(f"成功连接到Redis服务器: {redis_host}:{redis_port}")
                 except redis.ConnectionError as conn_err:
                     logger.error(f"Redis连接失败: {str(conn_err)}")
                     raise
                 
                 # 使用创建的Redis客户端初始化ShortTermMemory
-                self.short_term = ShortTermMemory(redis_client=redis_client, max_rounds=memory_settings.MAX_CHAT_ROUNDS)
+                self.short_term = ShortTermMemory(redis_client=redis_client, max_rounds=max_chat_rounds)
                 logger.info("短期记忆模块初始化成功")
             except Exception as redis_error:
                 logger.error(f"短期记忆模块初始化失败: {str(redis_error)}")
@@ -84,23 +91,29 @@ class MemoryManager:
                     import redis
                     from app.config import memory_settings
                     
+                    # 从环境变量或内存设置中获取配置
+                    redis_host = os.getenv("REDIS_HOST", "localhost")
+                    redis_port = int(os.getenv("REDIS_PORT", "6378"))
+                    redis_password = os.getenv("REDIS_PASSWORD", "!qaz2wsX")
+                    max_chat_rounds = int(os.getenv("MAX_CHAT_ROUNDS", "2"))
+                    
                     redis_client = redis.Redis(
-                        host=memory_settings.REDIS_HOST,
-                        port=memory_settings.REDIS_PORT,
-                        password=memory_settings.REDIS_PASSWORD,
+                        host=redis_host,
+                        port=redis_port,
+                        password=redis_password,
                         decode_responses=True
                     )
                     
                     # 测试Redis连接
                     try:
                         redis_client.ping()
-                        logger.info(f"异步初始化：成功连接到Redis服务器: {memory_settings.REDIS_HOST}:{memory_settings.REDIS_PORT}")
+                        logger.info(f"异步初始化：成功连接到Redis服务器: {redis_host}:{redis_port}")
                     except redis.ConnectionError as conn_err:
                         logger.error(f"异步初始化：Redis连接失败: {str(conn_err)}")
                         raise
                     
                     # 使用创建的Redis客户端初始化ShortTermMemory
-                    self.short_term = ShortTermMemory(redis_client=redis_client, max_rounds=memory_settings.MAX_CHAT_ROUNDS)
+                    self.short_term = ShortTermMemory(redis_client=redis_client, max_rounds=max_chat_rounds)
                     logger.info("异步初始化：短期记忆模块初始化成功")
                 except Exception as redis_error:
                     logger.error(f"异步初始化：短期记忆模块初始化失败: {str(redis_error)}")
@@ -215,7 +228,7 @@ class MemoryManager:
                 error=f"结束会话失败: {str(e)}"
             ).dict()
             
-    async def add_message(self, session_id: str, user_id: str, role: str, content: str, role_id: str = None) -> bool:
+    async def add_message(self, session_id: str, user_id: str, role: str, content: str, role_id: str = None, message_id: str = None) -> bool:
         """
         添加消息到会话
         
@@ -225,9 +238,13 @@ class MemoryManager:
             role: 消息角色（user/assistant/system）
             content: 消息内容
             role_id: 角色ID，对应MongoDB roles表中的_id
+            message_id: 消息ID，如果不提供则自动生成
             
         Returns:
             是否成功
+        
+        Raises:
+            ValueError: 如果用户是匿名用户但未选择用户名
         """
         try:
             # 检查短期记忆模块是否可用
@@ -263,7 +280,19 @@ class MemoryManager:
                     pass
             
             # 添加消息，并获取是否需要归档的消息
-            result, oldest_message = await self.short_term.add_message(session_id, user_id, role, content, role_id)
+            try:
+                result, oldest_message = await self.short_term.add_message(
+                    session_id=session_id, 
+                    user_id=user_id, 
+                    role=role, 
+                    content=content, 
+                    role_id=role_id,
+                    message_id=message_id
+                )
+            except ValueError as e:
+                # 重新抛出用户选择错误
+                logger.error(f"选择用户错误: {str(e)}")
+                raise
             
             # 如果有需要归档的消息，执行归档操作
             if result and oldest_message and self.long_term and self.long_term.db is not None:  # 修复: 使用identity比较而非布尔测试
@@ -553,7 +582,7 @@ class MemoryManager:
                 logger.error(f"创建备用会话失败: {str(inner_e)}")
                 raise
 
-    async def add_message_safe(self, session_id: str, user_id: str, role: str, content: str, role_id: str = None) -> bool:
+    async def add_message_safe(self, session_id: str, user_id: str, role: str, content: str, role_id: str = None, message_id: str = None) -> bool:
         """
         安全地添加消息到会话，包含会话创建和重试机制
         
@@ -563,6 +592,7 @@ class MemoryManager:
             role: 消息角色（user/assistant/system）
             content: 消息内容
             role_id: 角色ID，对应MongoDB roles表中的_id
+            message_id: 消息ID，如果不提供则自动生成
             
         Returns:
             是否成功
@@ -583,6 +613,7 @@ class MemoryManager:
                 role, 
                 content,
                 role_id,
+                message_id,
                 max_retries=3
             )
             

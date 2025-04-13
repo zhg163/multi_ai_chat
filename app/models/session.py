@@ -2,6 +2,7 @@ from datetime import datetime
 from typing import List, Optional, Dict, Any
 from bson.objectid import ObjectId
 from app.database.connection import Database
+from app.database.fallback import MockCollection
 
 class SessionStatus:
     """会话状态常量"""
@@ -17,7 +18,6 @@ class Session:
         """获取会话集合"""
         if cls.collection is None:
             if Database.db is None:
-                from tests.conftest import MockCollection
                 cls.collection = MockCollection("sessions")
             else:
                 cls.collection = Database.db.sessions

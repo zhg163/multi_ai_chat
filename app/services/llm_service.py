@@ -63,6 +63,11 @@ class LLMConfig(BaseModel):
     timeout: int = 60
     retry_attempts: int = 3
     retry_backoff_factor: float = 2.0
+    
+    # 禁用Protected命名空间检查
+    model_config = {
+        'protected_namespaces': ()
+    }
 
 # LLM响应模型
 class LLMResponse(BaseModel):

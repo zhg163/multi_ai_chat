@@ -9,7 +9,7 @@ from app.memory.schemas import SessionResponse, MemoryContext
 from typing import Dict, List, Optional
 import logging
 
-router = APIRouter(prefix="/memory", tags=["memory"])
+router = APIRouter(prefix="/api/memory", tags=["memory"])
 
 logger = logging.getLogger(__name__)
 
@@ -88,18 +88,23 @@ async def add_message(
             roleid = None
             
         memory_manager = await get_memory_manager()
-        success = await memory_manager.add_message(
-            session_id, 
-            user_id,
-            role, 
-            content,
-            role_id=roleid
-        )
-        
-        if not success:
-            raise HTTPException(status_code=400, detail="添加消息失败")
+        try:
+            success = await memory_manager.add_message(
+                session_id, 
+                user_id,
+                role, 
+                content,
+                role_id=roleid
+            )
             
-        return {"success": True}
+            if not success:
+                raise HTTPException(status_code=400, detail="添加消息失败")
+                
+            return {"success": True}
+        except ValueError as e:
+            # 返回400错误，提示用户选择名称
+            logger.warning(f"用户需要选择名称: {str(e)}")
+            raise HTTPException(status_code=400, detail=str(e))
     except HTTPException:
         raise
     except Exception as e:
@@ -237,4 +242,53 @@ async def inject_context(
         return {"success": True, "system_prompt": None}
         
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"生成上下文失败: {str(e)}") 
+        raise HTTPException(status_code=500, detail=f"生成上下文失败: {str(e)}")
+
+@router.post("/session/{session_id}/select-user")
+async def select_session_user(
+    session_id: str,
+    username: str,
+    current_user: Dict = Depends(get_current_user_optional)
+):
+    """
+    为匿名会话选择一个用户名
+    
+    Args:
+        session_id: 会话ID
+        username: 选择的用户名
+        
+    Returns:
+        操作结果
+    """
+    try:
+        user_id = current_user.get("id", "anonymous_user")
+        
+        # 如果用户已登录，不需要选择用户名
+        if user_id != "anonymous_user":
+            return {"success": True, "message": "已登录用户无需选择用户名"}
+            
+        if not username or username.strip() == "":
+            raise HTTPException(status_code=400, detail="用户名不能为空")
+            
+        # 获取memory manager
+        memory_manager = await get_memory_manager()
+        
+        # 确保会话存在
+        actual_session_id = await memory_manager.ensure_session_exists(user_id, session_id)
+        
+        # 设置selected_username
+        session_key = f"session:{user_id}:{actual_session_id}"
+        
+        # 验证Redis连接可用
+        if not memory_manager.short_term or not memory_manager.short_term.redis:
+            raise HTTPException(status_code=500, detail="存储服务不可用")
+            
+        # 保存用户名到会话
+        memory_manager.short_term.redis.hset(session_key, "selected_username", username)
+        logger.info(f"已为会话 {actual_session_id} 设置选中的用户名: {username}")
+        
+        return {"success": True, "message": f"已选择用户名: {username}"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"选择用户名失败: {str(e)}") 

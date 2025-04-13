@@ -1,6 +1,11 @@
+"""角色模型和相关操作"""
+
 from datetime import datetime
-from bson.objectid import ObjectId
+from bson import ObjectId
+from typing import Dict, Any, List, Optional
+
 from app.database.connection import Database
+from app.database.fallback import MockCollection
 
 class Role:
     collection = None
@@ -10,7 +15,7 @@ class Role:
         """获取角色集合"""
         if cls.collection is None:
             if Database.db is None:
-                from tests.conftest import MockCollection
+                # 使用本地的MockCollection而不是从tests导入
                 cls.collection = MockCollection("roles")
             else:
                 cls.collection = Database.db.roles

@@ -26,6 +26,9 @@ from fastapi.templating import Jinja2Templates
 
 logger = logging.getLogger(__name__)
 
+# 创建路由器，设置前缀为/api/llm
+router = APIRouter(prefix="/api/llm", tags=["llm"])
+
 # AI服务获取函数
 def get_ai_service(provider=None):
     """
@@ -236,12 +239,6 @@ async def stream_response(session_id, user_id, message, role_id, provider, model
         # 表示流结束
         yield b"event: done\ndata: \n\n"
 
-# 创建API路由器
-router = APIRouter(
-    prefix="/api/llm",
-    tags=["llm"]
-)
-
 # 确保有LLM API密钥
 DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
 ZHIPU_API_KEY = os.environ.get("ZHIPU_API_KEY", "")
@@ -400,6 +397,7 @@ async def chat(
     session_id: Optional[str] = Form(None, include_in_schema=False),
     stream: Optional[bool] = Form(False, include_in_schema=False),
     selected_username: Optional[str] = Form(None, include_in_schema=False),
+    current_user: Optional[Dict] = Depends(get_current_user_optional)
 ):
     """聊天接口，返回AI回复，支持JSON和表单数据"""
     try:
@@ -434,8 +432,8 @@ async def chat(
                     stream = body.get("stream", False)
                     selected_username = body.get("selected_username")
                     
-                    # 获取用户ID - 优先使用请求中的user_id
-                    user_id = body.get("user_id", "anonymous_user")
+                    # 获取用户ID - 优先使用current_user
+                    user_id = current_user.get("id", "anonymous_user") if current_user else "anonymous_user"
                     
                     logger.info(f"手动解析JSON: provider={provider}, model={model}, roleid={roleid}, stream={stream}, user_id={user_id}")
                 except Exception as parse_error:
@@ -460,13 +458,13 @@ async def chat(
                 stream = chat_request.stream
                 selected_username = None  # JSON请求可能未提供selected_username
                 
-                # 获取用户ID - 默认使用固定ID
-                user_id = "677f834ddaaba35dd9149b0b"  # 使用图中选中的用户ID作为默认值
+                # 获取用户ID - 优先使用current_user
+                user_id = current_user.get("id", "anonymous_user") if current_user else "anonymous_user"
                 
                 logger.info(f"使用Pydantic模型: provider={provider}, model={model}, roleid={roleid}, stream={stream}, user_id={user_id}")
         else:
-            # 从表单数据获取用户ID
-            user_id = "677f834ddaaba35dd9149b0b"  # 使用图中选中的用户ID作为默认值
+            # 从current_user获取用户ID
+            user_id = current_user.get("id", "anonymous_user") if current_user else "anonymous_user"
         
         # 确保有用户消息
         if message is None:

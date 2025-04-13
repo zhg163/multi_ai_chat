@@ -4,7 +4,7 @@ from typing import Dict, List, Optional, Any, Union
 from fastapi import APIRouter, Depends, HTTPException, status, Path, Query
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
-from app.db.mongodb import get_database
+from app.database.mongodb import get_database
 from app.models.message import (
     UserMessageCreate, 
     AssistantMessageCreate, 

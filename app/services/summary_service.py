@@ -24,7 +24,7 @@ class SummaryService:
         """初始化摘要服务"""
         self.api_key = os.getenv("DEEPSEEK_API_KEY", "")
         self.api_base = os.getenv("DEEPSEEK_API_BASE", "https://api.deepseek.com/v1")
-        self.model = memory_settings.SUMMARY_MODEL
+        self.model = os.getenv("SUMMARY_MODEL", "deepseek-chat")
         
         if not self.api_key:
             logger.warning("未设置DeepSeek API密钥，摘要服务可能无法正常工作")
@@ -178,7 +178,9 @@ class SummaryService:
             return True
             
         # Token消耗超过模型限制的70%
-        if token_count > memory_settings.MAX_TOKENS:
+        # 修复从字典中获取MAX_TOKENS，使用环境变量或默认值
+        max_tokens = int(os.getenv("MAX_TOKENS", "11000"))
+        if token_count > max_tokens:
             return True
             
         # TODO: 实现话题切换检测

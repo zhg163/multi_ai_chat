@@ -47,7 +47,7 @@ class RoleMatchingService:
         """
         try:
             # 获取数据库连接
-            from app.db.mongodb import get_db
+            from app.database.mongodb import get_db
             db = await get_db()
             
             # 1. 获取所有活跃角色
@@ -165,7 +165,7 @@ class RoleMatchingService:
         """计算上下文关联分数"""
         try:
             # 获取数据库连接
-            from app.db.mongodb import get_db
+            from app.database.mongodb import get_db
             db = await get_db()
             
             # 获取最近的10条消息

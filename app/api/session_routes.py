@@ -3,11 +3,16 @@ from typing import List, Dict, Optional, Any
 from bson import ObjectId
 from pydantic import BaseModel, Field, validator
 from datetime import datetime
+import logging
+import json
 
 from ..services.session_service import SessionService
 from ..auth.auth_bearer import JWTBearer
 from ..auth.auth_handler import get_current_user, get_current_user_or_none
 from ..models.user import User
+
+# 创建logger
+logger = logging.getLogger(__name__)
 
 router = APIRouter(
     prefix="/api/sessions",
@@ -472,16 +477,22 @@ async def end_and_archive_session(
 ):
     """结束会话并强制归档所有消息"""
     try:
-        # 解析请求体
-        data = await request.json()
-        user_id = data.get("user_id")
+        # 默认用户ID
+        user_id = "anonymous_user"
+        
+        # 尝试解析请求体，但处理为空的情况
+        try:
+            if request and request.headers.get("content-length", "0") != "0":
+                data = await request.json()
+                if data and "user_id" in data:
+                    user_id = data.get("user_id")
+        except json.JSONDecodeError:
+            # 请求体为空或格式不正确，使用默认值
+            logger.warning("请求体为空或JSON格式不正确，使用默认值")
         
         # 如果没有提供user_id，使用当前登录用户
-        if not user_id:
-            if current_user:
-                user_id = current_user.get("id", "anonymous_user")
-            else:
-                user_id = "anonymous_user"
+        if user_id == "anonymous_user" and current_user:
+            user_id = current_user.get("id", "anonymous_user")
         
         logger.info(f"结束并归档会话: session_id={session_id}, user_id={user_id}")
         

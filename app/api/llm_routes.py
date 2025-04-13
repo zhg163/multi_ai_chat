@@ -355,6 +355,10 @@ class ChatRequest(BaseModel):
     temperature: float = 0.7
     max_tokens: int = 2000
     roleid: Optional[str] = None  # 添加roleid字段，用于指定角色ID
+    role_id: Optional[str] = None  # 添加role_id作为roleid的别名
+    user_id: Optional[str] = None  # 添加user_id字段
+    session_id: Optional[str] = None  # 添加session_id字段
+    user_name: Optional[str] = None  # 添加user_name字段
 
 # 响应模型
 class ChatResponse(BaseModel):
@@ -425,15 +429,28 @@ async def chat(
                                 message = msg.get("content")
                                 break
                     
+                    # 支持roleid和role_id两种格式
                     roleid = body.get("roleid")
+                    if roleid is None:
+                        roleid = body.get("role_id")  # 添加对role_id的支持
+                    
                     temperature = body.get("temperature", 0.7)
                     max_tokens = body.get("max_tokens")
                     session_id = body.get("session_id")
                     stream = body.get("stream", False)
                     selected_username = body.get("selected_username")
                     
-                    # 获取用户ID - 优先使用current_user
-                    user_id = current_user.get("id", "anonymous_user") if current_user else "anonymous_user"
+                    # 获取用户ID - 优先使用body中的user_id
+                    user_id = body.get("user_id")
+                    if not user_id and current_user:
+                        user_id = current_user.get("id")
+                    if not user_id:
+                        user_id = "anonymous_user"
+                    
+                    # 如果有user_name，记录一下（便于调试）
+                    user_name = body.get("user_name")
+                    if user_name:
+                        logger.info(f"用户名称: {user_name}")
                     
                     logger.info(f"手动解析JSON: provider={provider}, model={model}, roleid={roleid}, stream={stream}, user_id={user_id}")
                 except Exception as parse_error:
@@ -451,15 +468,27 @@ async def chat(
                         message = msg.get("content")
                         break
                 
+                # 支持roleid和role_id
                 roleid = chat_request.roleid
+                if roleid is None:
+                    roleid = chat_request.role_id
+                
                 temperature = chat_request.temperature
                 max_tokens = chat_request.max_tokens
-                session_id = None  # JSON请求通常不直接提供session_id
+                session_id = chat_request.session_id  # 使用来自请求的session_id
                 stream = chat_request.stream
-                selected_username = None  # JSON请求可能未提供selected_username
+                selected_username = chat_request.user_name  # 使用用户名作为selected_username
                 
-                # 获取用户ID - 优先使用current_user
-                user_id = current_user.get("id", "anonymous_user") if current_user else "anonymous_user"
+                # 获取用户ID - 优先使用请求中的user_id
+                user_id = chat_request.user_id
+                if not user_id and current_user:
+                    user_id = current_user.get("id")
+                if not user_id:
+                    user_id = "anonymous_user"
+                
+                # 记录用户名（如果有）
+                if chat_request.user_name:
+                    logger.info(f"用户名称: {chat_request.user_name}")
                 
                 logger.info(f"使用Pydantic模型: provider={provider}, model={model}, roleid={roleid}, stream={stream}, user_id={user_id}")
         else:

@@ -525,6 +525,10 @@
         
         // 页面加载时获取角色列表和用户列表
         document.addEventListener('DOMContentLoaded', () => {
+            // 添加用户选择状态的检查
+            checkUserSelection();
+            
+            // 获取角色和用户数据
             fetchRoles();
             fetchUsers();
             loadChatHistory();
@@ -549,7 +553,28 @@
             endSessionButton.addEventListener('click', () => {
                 endCurrentSession();
             });
+            
+            // 检查URL中是否有自动开始新会话的参数
+            const urlParams = new URLSearchParams(window.location.search);
+            if (urlParams.has('new') && urlParams.get('new') === 'true') {
+                console.log("检测到URL参数new=true，自动开始新会话");
+                startNewChat();
+            }
         });
+        
+        // 检查用户选择状态
+        function checkUserSelection() {
+            // 从localStorage获取上次选择的用户ID
+            const savedUserId = localStorage.getItem('selectedUserId');
+            
+            console.log("页面加载 - 检查用户选择状态");
+            console.log("保存的用户ID:", savedUserId);
+            
+            // 如果没有保存的用户ID，提示用户选择
+            if (!savedUserId) {
+                console.log("没有找到保存的用户ID，将在加载用户后自动选择第一个用户");
+            }
+        }
         
         // 开始新会话
         async function startNewChat() {
@@ -1300,7 +1325,8 @@
                 messageInput.value = '';
                 
                 // 更新当前会话的标题和最后一条消息
-                updateCurrentSessionInfo(content);
+                const currentSessionId = localStorage.getItem('currentSessionId');
+                updateCurrentSessionInfo(content, currentSessionId);
             }
         });
         
@@ -2150,7 +2176,18 @@
         }
 
         // 更新当前会话信息
-        function updateCurrentSessionInfo(content) {
+        function updateCurrentSessionInfo(content, sessionId) {
+            // 如果没有提供sessionId，尝试从localStorage获取
+            if (!sessionId) {
+                sessionId = localStorage.getItem('currentSessionId');
+                // 如果仍然没有sessionId，则添加错误消息并返回
+                if (!sessionId) {
+                    console.error('更新会话信息失败：未找到会话ID');
+                    addSystemMessage('错误：无法更新会话，未找到会话ID');
+                    return;
+                }
+            }
+            
             const sessionIndex = chatHistory.findIndex(chat => chat.id === sessionId);
             if (sessionIndex !== -1) {
                 // 更新会话标题为第一条消息的前20个字符
@@ -2252,7 +2289,8 @@
                 // 尝试通过API结束会话
                 const response = await fetch(`/api/sessions/${currentSessionId}/end-and-archive`, {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' }
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({}) // 添加一个空对象作为请求体
                 });
                 
                 // 处理API响应

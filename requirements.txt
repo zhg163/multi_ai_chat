@@ -16,10 +16,15 @@ python-multipart==0.0.6
 sentence-transformers==4.0.2
 jieba==0.42.1
 numpy==1.25.2
-aiohttp==3.8.5
+aiohttp==3.9.1
 async-timeout==4.0.3
 # LLM服务依赖
 pyjwt>=2.8.0
 backoff>=2.2.1
+yarl==1.9.5
 # SSE支持
 sse-starlette>=1.6.5
+
+# 新增依赖
+redis==4.5.5
+httpx==0.25.0

@@ -63,3 +63,56 @@ uvicorn app.main:app --reload
 
 
 python /Users/zhg/.cursor/extensions/ms-python.debugpy-2024.6.0-darwin-arm64/bundled/libs/debugpy/adapter/../../debugpy/launcher 55819 -- -m uvicorn main:app --reload 
+
+
+
+docker-compose up -d
+
+# 查看服务状态
+docker-compose ps
+
+# 停止服务
+docker-compose stop
+
+# 重启服务
+docker-compose restart
+
+# 删除服务(数据会保留在volume中)
+docker-compose down
+
+# 完全删除(包括数据)
+docker-compose down -v
+
+
+# 进入Redis容器
+docker exec -it ai_chat_redis redis-cli -a your_redis_password
+
+# 进入MongoDB容器
+docker exec -it ai_chat_mongodb mongosh -u root -p example
+
+
+uvicorn app.main:app --reload 
+
+
+docker-compose stop app
+docker-compose build app
+docker-compose up -d app
+
+
+# 登录私有仓库
+docker login --username=<用户名> crpi-vevfocpds07ux96j.cn-beijing.personal.cr.aliyuncs.com/dockhub-zhg0914/dockhub-zhg
+
+
+docker pull redis:6.2.8
+docker pull mongo:5.0.22
+
+
+git config --global http.proxy http://127.0.0.1:15236
+git config --global https.proxy https://127.0.0.1:15236
+
+git init
+git add README.md
+git commit -m "first commit"
+git branch -M main
+git remote add origin https://github.com/zhg163/multi_ai_chat.git
+git push -u origin main

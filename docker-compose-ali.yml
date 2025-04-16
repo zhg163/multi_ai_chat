@@ -1,0 +1,61 @@
+version: '3.8'
+
+services:
+  redis:
+    image: redis:6.2-alpine
+    container_name: ai_chat_redis
+    ports:
+      - "6378:6379"
+    volumes:
+      - redis_data:/data
+    restart: unless-stopped
+    command: redis-server --requirepass !qaz2wsX
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "!qaz2wsX", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  mongodb:
+    image: mongo:5.0
+    container_name: ai_chat_mongodb
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongodb_data:/data/db
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: root
+      MONGO_INITDB_ROOT_PASSWORD: example
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "mongo", "mongodb://root:example@localhost:27017/admin", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  app:
+    image: crpi-vevfocpds07ux96j.cn-beijing.personal.cr.aliyuncs.com/zhgpub/dokcerhubzhg:v1.0.0
+    container_name: ai_chat_app
+    ports:
+      - "8000:8000"
+    environment:
+      - MONGODB_URL=mongodb://root:example@mongodb:27017/multi_ai_chat?authSource=admin
+      - MONGODB_USERNAME=root
+      - MONGODB_PASSWORD=example
+      - MONGODB_DATABASE=multi_ai_chat
+      - MONGODB_AUTH_SOURCE=admin
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=!qaz2wsX
+      - MAX_CHAT_ROUNDS=20
+      - DEEPSEEK_API_KEY=sk-9c772e549f6b47d39059438a814ea8f7
+      - DEEPSEEK_API_BASE=https://api.deepseek.com/v1
+      - ZHIPU_API_KEY=aa2016730edd4533a2662f3a0b3f8d01.JMyEC84zKmFfWFF1
+    depends_on:
+      - mongodb
+      - redis
+    restart: unless-stopped
+
+volumes:
+  redis_data:
+  mongodb_data:

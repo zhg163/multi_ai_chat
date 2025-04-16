@@ -19,11 +19,11 @@ var/
 *.egg-info/
 .installed.cfg
 *.egg
-
+.DS_Store
 # 虚拟环境
 venv/
 ENV/
-
+.venv/
 # IDE
 .idea/
 .vscode/
@@ -63,3 +63,9 @@ doc
 examples
 scripts
 tests
+node_modules
+npm-debug.log
+build
+.git
+.gitignore
+.env

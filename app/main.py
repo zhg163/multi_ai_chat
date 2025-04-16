@@ -327,15 +327,14 @@ except ImportError as e:
 try:
     # 获取项目根目录
     current_dir = os.path.dirname(os.path.abspath(__file__))
-    project_root = os.path.abspath(os.path.join(current_dir, ".."))
-    docs_dir = os.path.join(project_root, "docs")
+    static_dir = os.path.join(current_dir, "static")
     
-    if os.path.exists(docs_dir):
+    if os.path.exists(static_dir):
         # 挂载静态文件目录
-        app.mount("/docs", StaticFiles(directory=docs_dir), name="docs")
-        logging.info(f"静态文件目录已挂载: {docs_dir}")
+        app.mount("/static", StaticFiles(directory=static_dir), name="static")
+        logging.info(f"静态文件目录已挂载: {static_dir}")
     else:
-        logging.error(f"静态文件目录不存在: {docs_dir}")
+        logging.error(f"静态文件目录不存在: {static_dir}")
 except Exception as e:
     logging.error(f"无法挂载静态文件目录: {str(e)}")
 
@@ -369,7 +368,7 @@ async def startup_event():
 @app.get("/", response_class=HTMLResponse)
 async def root():
     """重定向到演示页面"""
-    return RedirectResponse(url="/docs/stream_example.html")
+    return RedirectResponse(url="/static/stream_example.html")
 
 @app.get("/health")
 async def health_check():

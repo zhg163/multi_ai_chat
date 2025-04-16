@@ -312,4 +312,121 @@ async def select_user_login(
         raise
     except Exception as e:
         logger.error(f"用户选择失败: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"用户选择失败: {str(e)}") 
+        raise HTTPException(status_code=500, detail=f"用户选择失败: {str(e)}")
+
+@router.post("/check-existing")
+async def check_existing_users(users: List[UserBase], db=Depends(get_db)):
+    """检查用户是否已存在，类似add_test_users.py的行为"""
+    try:
+        # 获取所有提交用户的名称
+        user_names = [user.name for user in users]
+        
+        # 检查已存在用户
+        existing_names = set()
+        cursor = db.users.find({"name": {"$in": user_names}})
+        existing_users = await cursor.to_list(length=len(user_names))
+        
+        for user in existing_users:
+            existing_names.add(user["name"])
+        
+        # 筛选出未存在的用户
+        new_users = [user.model_dump() for user in users if user.name not in existing_names]
+        
+        return {
+            "existingUsers": list(existing_names),
+            "newUsers": new_users,
+            "message": f"发现 {len(existing_names)} 个已存在用户，{len(new_users)} 个新用户"
+        }
+    except Exception as e:
+        logger.error(f"检查用户失败: {str(e)}")
+        logger.error(traceback.format_exc())
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"检查用户失败: {str(e)}"
+        )
+
+@router.post("/add-new")
+async def add_new_users(users: List[UserBase], db=Depends(get_db)):
+    """添加新用户，类似add_test_users.py的行为"""
+    try:
+        if not users:
+            return {"insertedCount": 0, "message": "无用户需要添加"}
+        
+        # 将Pydantic模型转换为字典
+        user_dicts = [user.model_dump() for user in users]
+        
+        # 添加新用户
+        result = await db.users.insert_many(user_dicts)
+        
+        return {
+            "insertedCount": len(result.inserted_ids),
+            "message": f"成功添加 {len(result.inserted_ids)} 个测试用户"
+        }
+    except Exception as e:
+        logger.error(f"添加用户失败: {str(e)}")
+        logger.error(traceback.format_exc())
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"添加用户失败: {str(e)}"
+        )
+
+@router.get("/list")
+async def list_all_users(db=Depends(get_db)):
+    """获取所有用户列表，用于显示当前用户"""
+    try:
+        cursor = db.users.find({})
+        users = await cursor.to_list(length=100)
+        
+        # 处理ObjectId
+        for user in users:
+            user["id"] = str(user.pop("_id"))
+        
+        return users
+    except Exception as e:
+        logger.error(f"获取用户列表失败: {str(e)}")
+        logger.error(traceback.format_exc())
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"获取用户列表失败: {str(e)}"
+        )
+
+@router.delete("/{user_id}")
+async def delete_user(user_id: str, db=Depends(get_db)):
+    """删除指定ID的用户"""
+    try:
+        # 验证ObjectId
+        try:
+            object_id = ObjectId(user_id)
+        except:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="无效的用户ID格式"
+            )
+        
+        # 检查用户是否存在
+        existing_user = await db.users.find_one({"_id": object_id})
+        if not existing_user:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"用户ID '{user_id}' 不存在"
+            )
+        
+        # 执行删除
+        result = await db.users.delete_one({"_id": object_id})
+        
+        if result.deleted_count == 0:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"删除用户 {user_id} 失败"
+            )
+            
+        return {"success": True, "message": f"成功删除用户 ID: {user_id}"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"删除用户失败: {str(e)}")
+        logger.error(traceback.format_exc())
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"删除用户失败: {str(e)}"
+        ) 

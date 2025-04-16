@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Initialize Roles</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+        }
+        textarea {
+            width: 100%;
+            height: 400px;
+            margin-bottom: 10px;
+        }
+        button {
+            padding: 10px 15px;
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            cursor: pointer;
+            margin-right: 10px;
+        }
+        button:hover {
+            background-color: #45a049;
+        }
+        .delete-btn {
+            background-color: #f44336;
+        }
+        .delete-btn:hover {
+            background-color: #d32f2f;
+        }
+        ul {
+            list-style-type: none;
+            padding: 0;
+        }
+        li {
+            margin-bottom: 10px;
+            padding: 8px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+    </style>
+</head>
+<body>
+    <h1>Initialize MongoDB Roles</h1>
+    <p>Enter JSON data for roles initialization:</p>
+    <textarea id="jsonData" placeholder="Enter valid JSON array of roles...">
+[
+    {
+        "name": "助手",
+        "description": "通用人工智能助手，擅长回答各种问题",
+        "personality": "友好、专业、有耐心",
+        "speech_style": "简洁清晰，用词专业",
+        "keywords": ["帮助", "问题", "如何", "怎么", "是什么", "解释"],
+        "temperature": 0.7,
+        "prompt_templates": ["你是一个通用AI助手，请帮助用户解决问题。"],
+        "system_prompt": "你是一个通用AI助手，请保持对话友好、专业、有耐心。",
+        "is_active": true
+    },
+    {
+        "name": "专家",
+        "description": "各个领域的专业知识提供者",
+        "personality": "专业、自信、精确",
+        "speech_style": "术语准确，富有专业性",
+        "keywords": ["专业", "领域", "分析", "详细", "专家"],
+        "temperature": 0.5,
+        "prompt_templates": ["你是相关领域的专家，请提供专业的解答。"],
+        "system_prompt": "你是一个专业领域专家，请提供准确、深入的分析和建议。",
+        "is_active": true
+    },
+    {
+        "name": "诗人",
+        "description": "创作诗歌和文学作品",
+        "personality": "富有想象力、感性、浪漫",
+        "speech_style": "优美、富有韵律感、意象丰富",
+        "keywords": ["诗", "诗歌", "创作", "文学", "写一首", "作品"],
+        "temperature": 0.9,
+        "prompt_templates": ["你是一位诗人，请创作一首诗。"],
+        "system_prompt": "你是一位才华横溢的诗人，善于用优美的语言表达深刻的情感和思想。",
+        "is_active": true
+    },
+    {
+        "name": "唐僧",
+        "description": "西天取经的佛教僧人，法号三藏",
+        "personality": "慈悲为怀、仁爱坚持、谨慎保守、有时固执",
+        "speech_style": "文雅得体，常引经据典，喜欢念经文，口头禅'阿弥陀佛'",
+        "keywords": ["取经", "佛法", "经书", "和平", "慈悲", "劝诫"],
+        "temperature": 0.6,
+        "prompt_templates": ["你是唐三藏法师，正在前往西天取经的路上。"],
+        "system_prompt": "你是唐三藏法师，西天取经团队的领导者。你性格慈悲，时常告诫徒弟不可杀生，凡事以德服人。你说话温和有礼，常引用佛经，喜欢以'阿弥陀佛'开始交流。",
+        "is_active": true
+    },
+    {
+        "name": "孙悟空",
+        "description": "齐天大圣，唐僧的大徒弟",
+        "personality": "聪明机智、勇敢无畏、正直、有时急躁冲动",
+        "speech_style": "直接爽快，常自称'俺老孙'，口头禅包括'大王''老孙''妖怪'等",
+        "keywords": ["大圣", "齐天大圣", "猴子", "金箍棒", "妖怪", "师父"],
+        "temperature": 0.8,
+        "prompt_templates": ["你是孙悟空，齐天大圣，唐僧的首席徒弟。"],
+        "system_prompt": "你是孙悟空，齐天大圣，唐僧的首席徒弟。你有500多年的道行，法力高强。你性格活泼好动，急躁冲动，但忠心护主。你常自称'俺老孙'，说话直接爽快，有时调皮捣蛋。你最讨厌别人叫你猴子，最恨妖怪和欺负弱小的人。",
+        "is_active": true
+    }
+]
+</textarea>
+    <button onclick="submitData()">Submit</button>
+    <div id="response"></div>
+    <div id="roleList">
+        <h2>Current Roles</h2>
+        <p>Loading role list...</p>
+    </div>
+
+    <script>
+        // Load role list when page opens
+        window.onload = function() {
+            loadRoleList();
+        };
+        
+        // Function to delete a role
+        async function deleteRole(roleId, roleName) {
+            if (!confirm(`确定要删除角色"${roleName}"吗？`)) {
+                return;
+            }
+            
+            try {
+                const response = await fetch(`/api/roles/${roleId}`, {
+                    method: 'DELETE',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    }
+                });
+                
+                if (response.ok) {
+                    alert(`角色"${roleName}"已成功删除！`);
+                    // Refresh the role list
+                    loadRoleList();
+                } else {
+                    const errorData = await response.json();
+                    alert(`删除失败: ${errorData.detail || '未知错误'}`);
+                }
+            } catch (error) {
+                alert(`删除请求出错: ${error.message}`);
+            }
+        }
+        
+        // Function to load and display the current role list
+        async function loadRoleList() {
+            const roleListDiv = document.getElementById('roleList');
+            
+            try {
+                const response = await fetch('/api/roles');
+                const roles = await response.json();
+                
+                if (roles && roles.length > 0) {
+                    let html = '<h2>Current Roles</h2><ul>';
+                    roles.forEach(role => {
+                        html += `
+                            <li>
+                                <span><strong>${role.name}</strong>: ${role.description || '无描述'}</span>
+                                <button onclick="deleteRole('${role.id}', '${role.name}')" class="delete-btn">删除</button>
+                            </li>`;
+                    });
+                    html += '</ul>';
+                    roleListDiv.innerHTML = html;
+                } else {
+                    roleListDiv.innerHTML = '<h2>Current Roles</h2><p>No roles found in the database.</p>';
+                }
+            } catch (error) {
+                roleListDiv.innerHTML = `<h2>Current Roles</h2><p>Error loading role list: ${error.message}</p>`;
+            }
+        }
+
+        async function submitData() {
+            const jsonData = document.getElementById('jsonData').value;
+            const responseDiv = document.getElementById('response');
+            
+            try {
+                // First check for existing roles
+                const checkResponse = await fetch('/api/roles/check-existing', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: jsonData
+                });
+                
+                const checkResult = await checkResponse.json();
+                
+                if (checkResult.existingRoles && checkResult.existingRoles.length > 0) {
+                    responseDiv.innerHTML = `<p>以下角色已存在: ${checkResult.existingRoles.join(', ')}</p>`;
+                    
+                    if (checkResult.newRoles && checkResult.newRoles.length > 0) {
+                        // Only add roles that don't exist yet
+                        const addResponse = await fetch('/api/roles/add-new', {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json',
+                            },
+                            body: JSON.stringify(checkResult.newRoles)
+                        });
+                        
+                        const addResult = await addResponse.json();
+                        responseDiv.innerHTML += `<p>成功添加 ${addResult.insertedCount || 0} 个角色</p>`;
+                    } else {
+                        responseDiv.innerHTML += `<p>所有角色已存在，无需添加新角色</p>`;
+                    }
+                } else {
+                    // No existing roles, add all
+                    const addResponse = await fetch('/api/roles/add-new', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: jsonData
+                    });
+                    
+                    const addResult = await addResponse.json();
+                    responseDiv.innerHTML = `<p>成功添加 ${addResult.insertedCount || 0} 个角色</p>`;
+                }
+                
+                // Refresh the role list
+                loadRoleList();
+            } catch (error) {
+                responseDiv.innerHTML = `<p>Error: ${error.message}</p>`;
+            }
+        }
+    </script>
+</body>
+</html>

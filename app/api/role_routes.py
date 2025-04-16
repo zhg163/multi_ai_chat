@@ -238,18 +238,16 @@ async def activate_role(role_id: str, db=Depends(get_db)):
 
 @router.delete("/{role_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_role(role_id: str, db=Depends(get_db)):
-    """删除角色（实际上是停用）"""
+    """删除角色"""
     try:
         object_id = ObjectId(role_id)
     except:
         raise HTTPException(status_code=400, detail="Invalid role ID format")
     
-    result = await db.roles.update_one(
-        {"_id": object_id},
-        {"$set": {"is_active": False}}
-    )
+    # 修改为真正删除角色
+    result = await db.roles.delete_one({"_id": object_id})
     
-    if result.matched_count == 0:
+    if result.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Role not found")
 
 # 关键词匹配相关路由
@@ -299,4 +297,57 @@ async def extract_keywords(request: KeywordExtractRequest):
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"提取关键词失败: {str(e)}"
+        )
+
+@router.post("/check-existing")
+async def check_existing_roles(roles: List[RoleCreate], db=Depends(get_db)):
+    """检查角色是否已存在，按名称检查"""
+    try:
+        # 获取所有提交角色的名称
+        role_names = [role.name for role in roles]
+        
+        # 检查已存在角色
+        existing_names = set()
+        cursor = db.roles.find({"name": {"$in": role_names}})
+        existing_roles = await cursor.to_list(length=len(role_names))
+        
+        for role in existing_roles:
+            existing_names.add(role["name"])
+        
+        # 筛选出未存在的角色
+        new_roles = [role.dict() for role in roles if role.name not in existing_names]
+        
+        return {
+            "existingRoles": list(existing_names),
+            "newRoles": new_roles,
+            "message": f"发现 {len(existing_names)} 个已存在角色，{len(new_roles)} 个新角色"
+        }
+    except Exception as e:
+        logger.error(f"检查角色失败: {str(e)}")
+        logger.error(traceback.format_exc())
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"检查角色失败: {str(e)}"
+        )
+
+@router.post("/add-new")
+async def add_new_roles(roles: List[dict], db=Depends(get_db)):
+    """添加新角色"""
+    try:
+        if not roles:
+            return {"insertedCount": 0, "message": "无角色需要添加"}
+        
+        # 添加新角色
+        result = await db.roles.insert_many(roles)
+        
+        return {
+            "insertedCount": len(result.inserted_ids),
+            "message": f"成功添加 {len(result.inserted_ids)} 个角色"
+        }
+    except Exception as e:
+        logger.error(f"添加角色失败: {str(e)}")
+        logger.error(traceback.format_exc())
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"添加角色失败: {str(e)}"
         ) 

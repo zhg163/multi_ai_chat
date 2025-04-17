@@ -116,3 +116,15 @@ git commit -m "first commit"
 git branch -M main
 git remote add origin https://github.com/zhg163/multi_ai_chat.git
 git push -u origin main
+
+
+git clone https://github.com/zhg163/multi_ai_chat.git
+cd multi_ai_chat
+python -m venv venv
+source venv/bin/activate  # Linux/Mac
+# 或 venv\Scripts\activate  # Windows
+
+# 安装依赖
+pip install -r requirements.txt
+
+nohup python3 -m uvicorn app.main:app --host 0.0.0.0 --port 8000 > output.log 2>&1 &

@@ -4,18 +4,21 @@
 定义了记忆模块的各种设置，包括短期和长期记忆的配置参数
 """
 
+import os
+
 # Redis配置
-REDIS_HOST = "localhost"
-REDIS_PORT = 6379
-REDIS_PASSWORD = ""
+REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
+REDIS_PORT = int(os.getenv("REDIS_PORT", "6378"))
+REDIS_PASSWORD = os.getenv("REDIS_PASSWORD", "!qaz2wsX")
 REDIS_DB = 0
 
 # 最大聊天轮数
-MAX_CHAT_ROUNDS = 50
+MAX_CHAT_ROUNDS = 2
 
 # 摘要生成配置
-SUMMARY_MODEL = "gpt-3.5-turbo"  # 用于生成摘要的模型
-SUMMARY_MAX_TOKENS = 300         # 摘要最大字数
+SUMMARY_MIN_MESSAGES = 5
+SUMMARY_MAX_TOKENS = 1000
+SUMMARY_MODEL = "gpt-3.5-turbo-16k"  # 用于生成摘要的模型
 SUMMARY_TEMPERATURE = 0.3        # 摘要生成温度，较低以保持一致性
 SUMMARY_PROMPT_TEMPLATE = "请总结以下对话内容，提取关键信息和主题：\n\n{context}"
 DEFAULT_SUMMARY = "这是一个关于多种主题的对话。"
@@ -58,14 +61,8 @@ MEMORY_CONFIG = {
 }
 
 # 向量存储配置
-VECTOR_STORE_CONFIG = {
-    "type": "in_memory",              # 向量存储类型：in_memory, mongodb, pinecone等
-    "collection_prefix": "vector_",   # 集合前缀
-    "index_params": {
-        "metric": "cosine",           # 相似度度量方式
-        "dimensions": 1536            # 与embedding_dimensions保持一致
-    }
-}
+VECTOR_COLLECTION_NAME = "chat_memory"
+VECTOR_DIMENSION = 1536
 
 # 记忆工作流配置
 MEMORY_WORKFLOW = {
@@ -81,4 +78,14 @@ MEMORY_TYPES = {
     "fact": {"weight": 1.2, "ttl": 90 * 86400},         # 事实记忆（90天）
     "preference": {"weight": 1.5, "ttl": 180 * 86400},   # 偏好记忆（180天）
     "important": {"weight": 2.0, "ttl": 365 * 86400}     # 重要记忆（365天）
+}
+
+# 向量存储配置（添加缺失的配置）
+VECTOR_STORE_CONFIG = {
+    "type": "simple",             # 向量存储类型：simple, chroma, faiss 等
+    "path": "app/data/vector_store",  # 向量存储文件路径
+    "collection_name": "message_embeddings",  # 集合名称
+    "distance_metric": "cosine",      # 相似度计算方法
+    "embedding_function": "openai",   # 嵌入函数类型
+    "persist": True                   # 是否持久化存储
 } 

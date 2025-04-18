@@ -13,7 +13,7 @@ class User:
         """获取用户集合"""
         if cls.collection is None:
             if Database.db is None:
-                from tests.conftest import MockCollection
+                # 使用app.database.fallback中已导入的MockCollection，不从测试代码导入
                 cls.collection = MockCollection("users")
             else:
                 cls.collection = Database.db.users

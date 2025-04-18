@@ -5,6 +5,7 @@
 import time
 import logging
 import uuid
+import asyncio
 from typing import List, Dict, Any, Optional
 from app.memory.buffer_memory import ShortTermMemory
 from app.memory.summary_memory import LongTermMemory
@@ -14,6 +15,7 @@ from app.memory.schemas import SessionResponse, MemoryContext
 from app.models.session import SessionStatus
 from app.config import memory_settings
 import os
+from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
@@ -294,19 +296,60 @@ class MemoryManager:
                 logger.error(f"选择用户错误: {str(e)}")
                 raise
             
+            # 双写逻辑：同时将当前消息保存到MongoDB
+            if result and self.long_term and self.long_term.db is not None:
+                try:
+                    # 构建当前消息
+                    current_message = {
+                        "role": role,
+                        "content": content,
+                        "role_id": role_id,
+                        "timestamp": datetime.utcnow().isoformat(),
+                        "message_id": message_id
+                    }
+                    
+                    # 尝试保存当前消息到MongoDB
+                    logger.info(f"双写：正在将当前消息保存到MongoDB")
+                    saved = await self.archive_message(session_id, user_id, current_message)
+                    if saved:
+                        logger.info(f"双写：当前消息已成功保存到MongoDB")
+                    else:
+                        logger.warning(f"双写：当前消息保存到MongoDB失败")
+                except Exception as save_error:
+                    logger.error(f"双写：保存当前消息到MongoDB失败: {str(save_error)}")
+                    # 这里我们不影响主流程，即使MongoDB写入失败也继续
+            
             # 如果有需要归档的消息，执行归档操作
-            if result and oldest_message and self.long_term and self.long_term.db is not None:  # 修复: 使用identity比较而非布尔测试
+            if result and oldest_message and self.long_term and self.long_term.db is not None:
                 try:
                     # 记录传递给归档功能的消息信息
-                    logger.info(f"准备归档消息: role={oldest_message.get('role', '未知')}, roleid={oldest_message.get('roleid', '无')}")
-                    archived = await self.archive_message(session_id, user_id, oldest_message)
-                    if archived:
-                        logger.info(f"已成功将消息归档到MongoDB: 会话{session_id}")
-                    else:
-                        logger.warning(f"消息归档失败: 会话{session_id}")
+                    logger.info(f"开始归档旧消息处理")
+                    logger.info(f"旧消息信息: role={oldest_message.get('role', '未知')}, role_id={oldest_message.get('role_id', '无')}")
+                    
+                    # 尝试最多3次归档
+                    max_retries = 3
+                    for attempt in range(max_retries):
+                        try:
+                            archived = await self.archive_message(session_id, user_id, oldest_message)
+                            if archived:
+                                logger.info(f"旧消息归档成功: 会话{session_id}")
+                                break
+                            else:
+                                if attempt < max_retries - 1:
+                                    logger.warning(f"归档尝试 {attempt + 1}/{max_retries} 失败，准备重试")
+                                    await asyncio.sleep(1)  # 等待1秒后重试
+                                else:
+                                    logger.error(f"旧消息归档失败，已达到最大重试次数: 会话{session_id}")
+                        except Exception as retry_error:
+                            if attempt < max_retries - 1:
+                                logger.warning(f"归档尝试 {attempt + 1}/{max_retries} 出错: {str(retry_error)}，准备重试")
+                                await asyncio.sleep(1)
+                            else:
+                                raise
                 except Exception as archive_error:
-                    logger.error(f"归档消息时出错: {str(archive_error)}")
-                    # 继续执行，不影响主流程
+                    logger.error(f"归档旧消息最终失败: {str(archive_error)}")
+                    # 记录失败的消息以便后续处理
+                    await self._record_failed_archive(session_id, user_id, oldest_message)
             
             return result
         except Exception as e:
@@ -346,10 +389,14 @@ class MemoryManager:
                     "archived_from": "redis_buffer_memory"
                 }
                 
-                # 添加roleid字段，如果原消息中存在
-                if "roleid" in message and message["roleid"] is not None:
-                    message_doc["roleid"] = message["roleid"]
-                    logger.info(f"消息归档: 包含roleid = {message['roleid']}")
+                # 添加role_id字段，如果原消息中存在
+                if "role_id" in message and message["role_id"] is not None:
+                    message_doc["role_id"] = message["role_id"]
+                    logger.info(f"消息归档: 包含role_id = {message['role_id']}")
+                # 向后兼容旧的roleid字段名
+                elif "roleid" in message and message["roleid"] is not None:
+                    message_doc["role_id"] = message["roleid"]
+                    logger.info(f"消息归档: 从roleid = {message['roleid']} 转换为 role_id")
                 
                 # 插入MongoDB
                 try:
@@ -618,7 +665,7 @@ class MemoryManager:
             )
             
             # 如果有需要归档的消息，执行归档操作
-            if result and oldest_message and self.long_term and self.long_term.db is not None:  # 修复: 使用identity比较而非布尔测试
+            if result and oldest_message and self.long_term and self.long_term.db is not None:
                 try:
                     await self.archive_message(actual_session_id, user_id, oldest_message)
                 except Exception as archive_error:
@@ -658,6 +705,32 @@ class MemoryManager:
         except Exception as e:
             logger.error(f"更新会话角色名称失败: {str(e)}")
             return {"success": False, "error": str(e)}
+
+    async def _record_failed_archive(self, session_id: str, user_id: str, message: dict) -> None:
+        """记录归档失败的消息"""
+        try:
+            # 确保数据库连接可用
+            if not self.long_term or not self.long_term.db:
+                logger.error("无法记录归档失败消息：数据库连接不可用")
+                return
+                
+            # 构建失败记录
+            failed_archive = {
+                "session_id": session_id,
+                "user_id": user_id,
+                "message": message,
+                "failed_at": datetime.utcnow(),
+                "status": "pending_retry"
+            }
+            
+            # 插入到失败记录集合
+            result = await self.long_term.db.failed_archives.insert_one(failed_archive)
+            if result.inserted_id:
+                logger.info(f"已记录归档失败消息: {result.inserted_id}")
+            else:
+                logger.error("记录归档失败消息失败")
+        except Exception as e:
+            logger.error(f"记录归档失败消息时出错: {str(e)}")
 
 # 全局变量保存单例实例
 _memory_manager = None

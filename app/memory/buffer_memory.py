@@ -8,9 +8,10 @@ import time
 import logging
 from app.memory.schemas import Message, ChatSession
 from app.config import memory_settings
-from typing import Dict
+from typing import Dict, Tuple, Optional
 import os
 import uuid
+from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
@@ -185,212 +186,101 @@ class ShortTermMemory:
             logger.error(f"获取用户信息失败: {str(error)}", exc_info=True)
             return None
 
-    async def add_message(self, session_id: str, user_id: str, role: str, content: str, role_id: str = None, message_id: str = None) -> tuple:
+    def _get_message_key(self, session_id: str, user_id: str) -> str:
         """
-        添加消息到会话
+        构建消息键
         
         Args:
             session_id: 会话ID
             user_id: 用户ID
-            role: 消息角色（user/assistant/system）
-            content: 消息内容
-            role_id: 角色ID，对应MongoDB roles表中的_id
-            message_id: 消息ID，如果不提供则自动生成
             
         Returns:
-            (bool, dict): 添加是否成功，以及可能需要归档的消息
+            str: Redis键名
+        """
+        return f"messages:{user_id}:{session_id}"
+        
+    async def add_message(self, session_id: str, user_id: str, role: str, content: str,
+                         role_id: str = None, message_id: str = None, metadata: dict = None) -> Tuple[bool, Optional[dict]]:
+        """添加消息到Redis缓存
+        
+        Args:
+            session_id: 会话ID
+            user_id: 用户ID 
+            role: 消息角色
+            content: 消息内容
+            role_id: 角色ID
+            message_id: 消息ID
+            metadata: 消息元数据
+            
+        Returns:
+            Tuple[bool, Optional[dict]]: (是否成功, 需要归档的消息)
         """
         try:
-            logger.info(f"【role跟踪】ShortTermMemory - 接收到role='{role}', roleid='{role_id}'")
-            message_key = f"messages:{user_id}:{session_id}"
+            # 构建消息键
+            message_key = self._get_message_key(session_id, user_id)
             
-            # 处理roleid为字符串"null"的情况
-            if role_id == "null" or not role_id or (isinstance(role_id, str) and not role_id.strip()):
-                role_id = None
-                logger.warning("接收到无效的role_id值，已将其转换为None")
-                logger.info("【role跟踪】无效role_id，设置为None")
-            
-            # 记录传入的role_id
-            logger.info(f"接收到的原始roleid: {role_id}, 类型: {type(role_id).__name__}")
-            
-            # 创建基本消息对象
-            message = Message(role=role, content=content)
-            original_role = role  # 保存原始角色名用于日志记录
-            logger.info(f"【role跟踪】消息对象创建 - role='{message.role}', original_role='{original_role}'")
-            
-            # 设置roleid，确保值不是null字符串
-            if role_id:
-                message.roleid = role_id 
-                logger.info(f"设置message.roleid为: {role_id}")
-            else:
-                message.roleid = None
-                logger.info(f"roleid为空值，设置message.roleid为: None")
-            
-            # 先将消息转换为字典，确保message_dict已定义
-            message_dict = message.dict()
-            logger.info(f"【role跟踪】序列化前 - role='{message_dict.get('role')}', roleid='{message_dict.get('roleid')}'")
-            
-            # 设置消息ID
-            if message_id:
-                message_dict["message_id"] = message_id
-                logger.info(f"使用提供的消息ID: {message_id}")
-            else:
-                # 生成一个唯一的消息ID
-                message_dict["message_id"] = f"msg_{uuid.uuid4()}"
-                logger.info(f"生成新的消息ID: {message_dict['message_id']}")
-            
-            # 如果角色是"user"，尝试处理用户名称
-            if original_role == "user":
-                # 先检查是否为anonymous_user，如果是则尝试使用会话中存储的selected_username
-                if user_id == "anonymous_user":
-                    try:
-                        # 获取会话信息
-                        session_info = self.get_session_info(session_id, user_id)
-                        if session_info and "selected_username" in session_info:
-                            selected_username = session_info["selected_username"]
-                            logger.info(f"从会话信息中获取到选中的用户名称: {selected_username}")
-                            message_dict["role"] = selected_username
-                            logger.info(f"【role跟踪】用户名称替换 - 从'{original_role}'到'{selected_username}'")
-                        else:
-                            logger.error("会话中没有选中的用户名称，但用户是匿名用户")
-                            # 抛出异常，强制客户端选择用户名
-                            raise ValueError("未选择用户，请先选择一个用户名再发送消息")
-                    except ValueError:
-                        # 重新抛出明确的错误
-                        raise
-                    except Exception as e:
-                        logger.error(f"获取会话选中用户名称失败: {str(e)}")
-                        raise ValueError("处理用户信息失败，请重新选择用户名再尝试")
-                
-                # 如果上面的处理没有替换角色名称，尝试从MongoDB获取用户信息
-                if message_dict["role"] == original_role:
-                    try:
-                        user_info = await self.get_user_info(user_id)
-                        logger.info(f"从数据库获取到用户信息: {user_info}")
-                        
-                        if user_info and "name" in user_info and user_info["name"]:
-                            logger.info(f"使用用户中文名称: {user_info['name']}，替换原始角色: {original_role}")
-                            message_dict["role"] = user_info["name"]
-                            logger.info(f"【role跟踪】用户名称替换 - 从'{original_role}'到'{message_dict['role']}'")
-                        else:
-                            # 尝试其他可能的用户名称字段
-                            for field in ['username', 'nickname', 'display_name']:
-                                if user_info and field in user_info and user_info[field]:
-                                    logger.info(f"使用用户字段{field}: {user_info[field]}，替换原始角色: {original_role}")
-                                    message_dict["role"] = user_info[field]
-                                    logger.info(f"【role跟踪】用户名称替换 - 从'{original_role}'到'{message_dict['role']}'")
-                                    break
-                            else:
-                                logger.info(f"【role跟踪】未找到合适的用户名称字段，保持为'{original_role}'")
-                    except Exception as e:
-                        logger.error(f"获取用户信息失败: {str(e)}")
-                        logger.info(f"【role跟踪】获取用户信息失败，保持为'{original_role}'")
-            # 如果有角色ID，尝试查询角色信息并更新角色名称
-            elif role_id:
-                try:
-                    role_info = await self.get_role_info(role_id)
-                    logger.info(f"从数据库获取到角色信息: {role_info}")
-
-                    # 修改此处逻辑，允许角色被替换
-                    if role_info and "name" in role_info:
-                        logger.info(f"使用角色中文名称: {role_info['name']}，替换原始角色: {original_role}")
-                        message_dict["role"] = role_info["name"]
-                        logger.info(f"【role跟踪】角色名称替换 - 从'{original_role}'到'{message_dict['role']}'")
-                    else:
-                        logger.info(f"【role跟踪】角色信息中没有name字段，保持为'{original_role}'")
-                except Exception as e:
-                    logger.error(f"获取角色信息失败: {str(e)}")
-                    logger.info(f"【role跟踪】获取角色信息失败，保持为'{original_role}'")
-            else:
-                logger.info(f"【role跟踪】无需替换角色名称，保持为'{original_role}'")
+            logger.info(f"添加消息到Redis，键: {message_key}, 角色: {role}, 内容长度: {len(content)}")
             
             # 获取当前消息数量
-            message_count = self.redis.llen(message_key)
+            current_count = self.redis.llen(message_key)
+            logger.info(f"当前消息数量: {current_count}, 最大轮数: {self.max_rounds * 2}")
             
-            # 获取要归档的消息
+            # 构建元数据
+            metadata_dict = metadata or {}
+            if message_id:
+                metadata_dict["message_id"] = message_id
+            
+            # 构建消息
+            message = {
+                "role": role,
+                "content": content,
+                "timestamp": datetime.utcnow().isoformat(),
+                "role_id": role_id if role_id else ""
+            }
+            if metadata_dict:
+                message["metadata"] = metadata_dict
+                
+            # 添加消息到列表
+            self.redis.rpush(message_key, json.dumps(message))
+            
+            # 检查是否需要归档
+            should_archive = current_count >= (self.max_rounds * 2 - 1)  # 减1是因为我们刚添加了一条消息
             oldest_message = None
-            should_archive = message_count >= (self.max_rounds * 2)  # 一轮包含用户和助手两条消息
             
             if should_archive:
-                # 获取最旧的消息(最后一条)用于归档
-                oldest_json = self.redis.lindex(message_key, -1)
-                if oldest_json:
-                    try:
-                        oldest_message = json.loads(oldest_json)
-                        logger.info(f"准备归档消息: {oldest_message.get('role', '未知')}, 内容前20字符: {oldest_message.get('content', '')[:20]}")
-                    except json.JSONDecodeError:
-                        logger.error("解析最旧消息时出错，可能是JSON格式不正确")
-            
-            # 确保roleid字段存在且不是空字符串或"null"字符串
-            if not message_dict.get("roleid") or message_dict.get("roleid") == "null" or message_dict.get("roleid") == "":
-                message_dict["roleid"] = None
-                logger.info("检测到roleid为空或无效，已将其设置为None")
-            
-            # 关键修改：为所有角色提供二次替换机会，不再限制只有assistant角色
-            if role_id and message_dict.get("role") == original_role and original_role != "user":
-                logger.info(f"【role跟踪】检测到角色需要二次替换，当前role='{message_dict.get('role')}'")
                 try:
-                    from app.database.connection import get_database
-                    from bson.objectid import ObjectId
-                    
-                    db = await get_database()
-                    if db is not None:
-                        role_info_second = await db.roles.find_one({"_id": ObjectId(role_id)})
-                        logger.info(f"【role跟踪】二次查询结果 - role_info={role_info_second}")
-                        if role_info_second and "name" in role_info_second and role_info_second["name"]:
-                            role_name = role_info_second["name"]
-                            logger.info(f"【角色替换】将'{original_role}'替换为实际角色名称: {role_name}")
-                            logger.info(f"【role跟踪】最终替换 - 从'{message_dict['role']}'到'{role_name}'")
-                            message_dict["role"] = role_name
-                except Exception as replace_error:
-                    logger.error(f"尝试替换角色名称时出错: {str(replace_error)}")
-                    logger.info(f"【role跟踪】二次替换异常，保持原值'{message_dict.get('role')}'")
-            
-            # 确保role字段是有效值    
-            if not message_dict.get("role"):
-                logger.warning(f"发现role字段为空值，恢复为原始值: {original_role}")
-                logger.info(f"【role跟踪】role字段为空，恢复为原始值'{original_role}'")
-                message_dict["role"] = original_role
-                
-            # 记录最终保存的数据    
-            logger.info(f"最终保存到Redis的消息数据: {message_dict}")
-            logger.info(f"【role跟踪】最终保存到Redis - role='{message_dict.get('role')}', roleid='{message_dict.get('roleid')}'")
-            
-            # 序列化消息并添加到Redis
-            message_json = json.dumps(message_dict)
-            result = self.redis.lpush(message_key, message_json)
-            
-            if not result:
-                logger.error(f"Redis lpush返回失败: {result}")
-                logger.info("【role跟踪】Redis保存失败")
-                return False, None
-            
-            # 二次检查：如果角色名称仍为原始值，尝试更新它（非user角色）
-            if message_dict["role"] == original_role and role_id and original_role != "user":
-                try:
-                    updated_dict = message_dict.copy()
-                    updated_dict["role"] = role_info["name"] if role_info and "name" in role_info else original_role
-                    if updated_dict["role"] != original_role:
-                        updated_json = json.dumps(updated_dict)
-                        self.redis.lset(message_key, 0, updated_json)
-                        logger.info(f"【角色替换】后置更新 - 将'{original_role}'替换为'{updated_dict['role']}'")
+                    # 获取最旧的消息
+                    oldest_message_json = self.redis.lindex(message_key, 0)
+                    if oldest_message_json:
+                        try:
+                            oldest_message = json.loads(oldest_message_json)
+                            # 删除最旧的消息
+                            self.redis.lpop(message_key)
+                            logger.info(f"已删除最旧消息: {oldest_message.get('role', '未知')} - {oldest_message.get('content', '')[:100]}")
+                        except json.JSONDecodeError as je:
+                            logger.error(f"解析最旧消息JSON失败: {str(je)}")
+                            oldest_message = None
+                    else:
+                        logger.warning("未找到最旧消息")
                 except Exception as e:
-                    logger.error(f"后置更新角色名称失败: {str(e)}")
-                
-            # 维持队列大小
-            self.redis.ltrim(message_key, 0, (self.max_rounds * 2) - 1)
+                    logger.error(f"处理最旧消息失败: {str(e)}")
+                    oldest_message = None
+                    
+                # 确保消息列表长度不超过限制
+                try:
+                    self.redis.ltrim(message_key, 0, (self.max_rounds * 2) - 1)
+                    logger.info(f"已裁剪消息列表至 {self.max_rounds * 2} 条")
+                except Exception as e:
+                    logger.error(f"裁剪消息列表失败: {str(e)}")
             
-            logger.info(f"已添加消息到会话 {session_id}: role={message.role}, roleid={message.roleid or '无'}, content前20字符={content[:20]}...")
-            logger.info(f"【role跟踪】消息成功保存到Redis")
+            return True, oldest_message
             
-            # 返回添加状态和需要归档的消息
-            return (True, oldest_message) if should_archive else (True, None)
         except Exception as e:
-            logger.error(f"添加消息失败: {str(e)}", exc_info=True)  # 添加完整堆栈信息
-            logger.info(f"【role跟踪】处理消息异常：{str(e)}")
+            logger.error(f"添加消息失败: {str(e)}")
             return False, None
             
-    async def add_message_with_retry(self, session_id: str, user_id: str, role: str, content: str, role_id: str = None, message_id: str = None, max_retries=3) -> tuple:
+    async def add_message_with_retry(self, session_id: str, user_id: str, role: str, content: str, 
+                                role_id: str = None, message_id: str = None, metadata: dict = None, max_retries=3) -> tuple:
         """
         添加消息到会话，带重试机制
         
@@ -401,6 +291,7 @@ class ShortTermMemory:
             content: 消息内容
             role_id: 角色ID
             message_id: 消息ID
+            metadata: 消息元数据
             max_retries: 最大重试次数
             
         Returns:
@@ -423,7 +314,8 @@ class ShortTermMemory:
                     role=role,
                     content=content,
                     role_id=role_id,
-                    message_id=message_id
+                    message_id=message_id,
+                    metadata=metadata
                 )
                 
                 if result:
@@ -454,14 +346,18 @@ class ShortTermMemory:
     def get_session_messages(self, session_id: str, user_id: str) -> list:
         """获取会话的所有消息，按时间顺序排列（旧->新）"""
         try:
-            message_key = f"messages:{user_id}:{session_id}"
+            message_key = self._get_message_key(session_id, user_id)
             
             # 获取所有消息
             messages_json = self.redis.lrange(message_key, 0, -1)
             
-            # 解析消息并反转列表（使其按时间顺序排列）
-            messages = [json.loads(msg) for msg in messages_json]
-            messages.reverse()  # 由于lpush，我们需要反转列表
+            # 解析消息
+            messages = []
+            for msg in messages_json:
+                try:
+                    messages.append(json.loads(msg))
+                except json.JSONDecodeError:
+                    logger.error(f"解析消息JSON失败: {msg}")
             
             return messages
         except Exception as e:
@@ -489,6 +385,7 @@ class ShortTermMemory:
     def count_tokens(self, session_id: str, user_id: str) -> int:
         """估算会话中的token数量"""
         try:
+            # 使用get_session_messages获取消息，确保一致性
             messages = self.get_session_messages(session_id, user_id)
             if not messages:
                 return 0
@@ -496,7 +393,7 @@ class ShortTermMemory:
             # 简单估算：假设平均每个字符是1.5个token
             text = ""
             for msg in messages:
-                text += msg["content"]
+                text += msg.get("content", "")
                 
             return int(len(text) * 1.5)  # 简单估算
         except Exception as e:
@@ -527,7 +424,7 @@ class ShortTermMemory:
     async def update_role_names(self, user_id: str, session_id: str) -> dict:
         """
         更新会话中所有消息的角色名称
-        根据roleid字段从MongoDB中获取最新的角色名称
+        根据role_id字段从MongoDB中获取最新的角色名称
         
         Args:
             user_id: 用户ID
@@ -537,7 +434,7 @@ class ShortTermMemory:
             dict: 更新结果统计
         """
         try:
-            message_key = f"messages:{user_id}:{session_id}"
+            message_key = self._get_message_key(session_id, user_id)
             
             # 检查会话是否存在
             if not self.redis.exists(message_key):
@@ -574,7 +471,7 @@ class ShortTermMemory:
                     message = json.loads(message_json)
                     
                     # 检查是否有角色ID
-                    role_id = message.get("roleid")
+                    role_id = message.get("role_id")
                     
                     if not role_id or role_id == "null" or (isinstance(role_id, str) and not role_id.strip()):
                         logger.debug(f"消息 #{i+1} 没有有效的角色ID")

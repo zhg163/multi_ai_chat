@@ -17,8 +17,11 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 
 # 配置日志
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.DEBUG,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    # ,
+    # filename='app.log',
+    # filemode='a'
 )
 
 # 加载环境变量
@@ -94,6 +97,14 @@ try:
 except ImportError as e:
     logging.error(f"无法导入LLM服务路由: {str(e)}")
     
+    # 添加LLM修复路由
+    try:
+        from app.api import llm_fix
+        app.include_router(llm_fix.router, tags=["llm_fix"])
+        logging.info("LLM修复路由已加载")
+    except ImportError as fix_error:
+        logging.error(f"无法导入LLM修复路由: {str(fix_error)}")
+    
     # 尝试修复并重新导入
     try:
         # 尝试清除模块缓存
@@ -131,56 +142,32 @@ try:
     logging.info("会话管理路由已加载")
 except ImportError as e:
     logging.error(f"无法导入会话管理路由: {str(e)}")
+
+# 导入自定义会话路由
+try:
+    from app.api.custom_session_routes import router as custom_session_router
+    app.include_router(custom_session_router)
+    logging.info("自定义会话路由已加载")
+except ImportError as e:
+    logging.error(f"无法导入自定义会话路由: {str(e)}")
     
-    # 导入标准数据库模块
-    from app.database.mongodb import get_database, get_collection
-    
-    # 添加简易用户API路由
-    @app.get("/api/users/", tags=["users"])
-    async def get_users(
-        limit: int = 100,
-        offset: int = 0
-    ):
-        """
-        获取用户列表，如果数据库中没有用户，则返回示例用户
-        """
-        try:
-            # 使用标准方法获取MongoDB连接
-            db = await get_database()
-            if db is None:
-                logging.warning("数据库连接失败，返回示例用户")
-                return [
-                    {
-                        "_id": "677f834ddaaba35dd9149b0b",
-                        "username": "zhangsan",
-                        "name": "轻舞飞扬",
-                        "email": "zhang@example.com",
-                        "avatar": "https://example.com/avatars/user1.png",
-                        "description": "普通用户",
-                        "tags": ["电影", "篮球"],
-                        "is_active": True
-                    }
-                ]
-            
-            # 记录日志
-            logging.info(f"正在获取用户列表，limit: {limit}, offset: {offset}")
-            
-            # 从数据库查询用户
-            users_cursor = db.users.find({}).skip(offset).limit(limit)
-            users = await users_cursor.to_list(length=limit)
-            
-            # 记录查询结果
-            logging.info(f"从数据库获取到 {len(users)} 个用户")
-            
-            # 如果数据库中有用户，则返回实际用户
-            if users:
-                # 转换ObjectId为字符串
-                for user in users:
-                    user["_id"] = str(user["_id"])
-                return users
-            
-            # 如果数据库中没有用户，则返回示例用户
-            logging.warning("数据库中没有找到用户，返回示例用户")
+# 导入标准数据库模块
+from app.database.mongodb import get_database, get_collection
+
+# 添加简易用户API路由
+@app.get("/api/users/", tags=["users"])
+async def get_users(
+    limit: int = 100,
+    offset: int = 0
+):
+    """
+    获取用户列表，如果数据库中没有用户，则返回示例用户
+    """
+    try:
+        # 使用标准方法获取MongoDB连接
+        db = await get_database()
+        if db is None:
+            logging.warning("数据库连接失败，返回示例用户")
             return [
                 {
                     "_id": "677f834ddaaba35dd9149b0b",
@@ -194,21 +181,41 @@ except ImportError as e:
                 }
             ]
         
-        except Exception as e:
-            # 记录错误
-            logging.error(f"获取用户列表时发生错误: {str(e)}")
-            return [
-                {
-                    "_id": "677f834ddaaba35dd9149b0b",
-                    "username": "zhangsan",
-                    "name": "轻舞飞扬",
-                    "email": "zhang@example.com",
-                    "avatar": "https://example.com/avatars/user1.png",
-                    "description": "普通用户",
-                    "tags": ["电影", "篮球"],
-                    "is_active": True
-                }
-            ]
+        # 记录日志
+        logging.info(f"正在获取用户列表，limit: {limit}, offset: {offset}")
+        
+        # 从数据库查询用户
+        users_cursor = db.users.find({}).skip(offset).limit(limit)
+        users = await users_cursor.to_list(length=limit)
+        
+        # 记录查询结果
+        logging.info(f"从数据库获取到 {len(users)} 个用户")
+        
+        # 如果数据库中有用户，则返回实际用户
+        if users:
+            # 转换ObjectId为字符串
+            for user in users:
+                user["_id"] = str(user["_id"])
+            return users
+        
+        # 如果数据库中没有用户，则返回示例用户
+        logging.warning("数据库中没有找到用户，返回示例用户")
+        return [
+            {
+                "_id": "677f834ddaaba35dd9149b0b",
+                "username": "zhangsan",
+                "name": "轻舞飞扬",
+                "email": "zhang@example.com",
+                "avatar": "https://example.com/avatars/user1.png",
+                "description": "普通用户",
+                "tags": ["电影", "篮球"],
+                "is_active": True
+            }
+        ]
+    
+    except Exception as e:
+        logging.error(f"获取用户列表失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"获取用户列表失败: {str(e)}")
 
 # 添加用户选择端点
 @app.post("/api/users/select-user", tags=["users"])
@@ -361,6 +368,27 @@ async def startup_event():
             logging.info("记忆管理器初始化成功")
         except Exception as e:
             logging.error(f"记忆管理器初始化失败: {str(e)}")
+        
+        # 加载LLM修复模块
+        try:
+            from app.api import llm_fix
+            app.include_router(llm_fix.router)
+            logging.info("LLM修复路由已加载(启动时)")
+            
+            # 尝试自动修复LLM服务的generate方法
+            try:
+                import httpx
+                async with httpx.AsyncClient() as client:
+                    fix_url = "http://localhost:8000/api/llm/fix_generate_method"
+                    response = await client.get(fix_url)
+                    if response.status_code == 200:
+                        logging.info(f"自动修复LLM generate方法成功: {response.json()}")
+                    else:
+                        logging.warning(f"自动修复LLM generate方法失败: {response.status_code}, {response.text}")
+            except Exception as auto_fix_error:
+                logging.error(f"尝试自动修复LLM generate方法时出错: {str(auto_fix_error)}")
+        except Exception as e:
+            logging.error(f"加载LLM修复模块失败: {str(e)}")
             
     except Exception as e:
         logging.error(f"应用启动事件执行失败: {str(e)}")

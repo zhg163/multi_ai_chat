@@ -6,13 +6,18 @@ LLM API路由模块
 
 import os
 import logging
-from typing import List, Dict, Any, Optional
+import traceback
+import asyncio
+import time
+import inspect
+import re
+import json
+from typing import List, Dict, Any, Optional, Union, Tuple
 from fastapi import APIRouter, HTTPException, Depends, Request, BackgroundTasks, Query, Form
 from fastapi.responses import StreamingResponse, JSONResponse
 from sse_starlette.sse import EventSourceResponse
-import asyncio
-import json
-import time
+from datetime import datetime
+from enum import Enum
 
 from pydantic import BaseModel, Field
 
@@ -118,7 +123,7 @@ async def stream_response(session_id, user_id, message, role_id, provider, model
         ai_service = get_ai_service(provider)
         full_response = ""
         
-        logger.info(f"开始生成流式回复: session_id={session_id}, role_id={role_id}")
+        logger.info(f"开始生成流式回复: session_id={session_id}, role_id={role_id}, provider={provider}, model={model}")
         
         # 适配不同的流式生成方法
         if hasattr(ai_service, "generate_chat_stream"):
@@ -146,27 +151,45 @@ async def stream_response(session_id, user_id, message, role_id, provider, model
             # 构建配置
             from app.services.llm_service import LLMConfig, LLMProvider
             config = None
-            if model or provider:
-                # 获取API密钥
-                from app.services.llm_service import get_api_key
-                api_key = None
-                
-                if provider:
-                    try:
-                        provider_enum = LLMProvider(provider)
-                        api_key = get_api_key(provider_enum)
-                    except (ValueError, ImportError):
-                        logger.warning(f"无法获取提供商 {provider} 的API密钥")
-                
-                config = LLMConfig(
-                    provider=provider_enum if provider else None,
-                    model_name=model,
-                    api_key=api_key,
-                    temperature=temperature,
-                    max_tokens=max_tokens
-                )
             
-            logger.info(f"调用generate_stream: messages={len(messages)}条, config={config is not None}")
+            # 获取API密钥
+            api_key = None
+            provider_enum = None
+            
+            if provider:
+                try:
+                    provider_enum = LLMProvider(provider)
+                    from app.services.llm_service import get_api_key
+                    api_key = get_api_key(provider_enum)
+                    logger.info(f"流式响应 - 获取到API密钥状态: {api_key is not None}, 提供商: {provider}")
+                except (ValueError, ImportError) as key_error:
+                    logger.error(f"流式响应 - 获取API密钥失败: {str(key_error)}")
+                    yield f"data: 错误: API密钥获取失败: {str(key_error)}\n\n".encode('utf-8')
+                    return
+            else:
+                # 使用默认提供商
+                provider_enum = LLMProvider.DEEPSEEK if DEEPSEEK_API_KEY else LLMProvider.ZHIPU
+                api_key = DEEPSEEK_API_KEY if provider_enum == LLMProvider.DEEPSEEK else ZHIPU_API_KEY
+                provider = provider_enum.value
+                logger.info(f"流式响应 - 使用默认提供商: {provider_enum.value}, API密钥状态: {api_key is not None}")
+            
+            # 如果未提供模型名称，使用默认模型
+            model_name = model or ("deepseek-chat" if provider_enum == LLMProvider.DEEPSEEK else "glm-4")
+            
+            # 确保max_tokens是整数
+            max_tokens_value = max_tokens or 2000
+            
+            config = LLMConfig(
+                provider=provider_enum,
+                model_name=model_name,
+                api_key=api_key,
+                temperature=temperature,
+                max_tokens=max_tokens_value
+            )
+            
+            logger.info(f"流式响应 - 创建LLM配置: provider={provider_enum.value}, model={model_name}, temperature={temperature}, max_tokens={max_tokens_value}")
+            logger.info(f"流式响应 - 调用generate_stream: messages={len(messages)}条")
+            
             stream_generator = ai_service.generate_stream(
                 messages=messages,
                 config=config
@@ -222,7 +245,6 @@ async def stream_response(session_id, user_id, message, role_id, provider, model
         if full_response:
             # 清理响应中可能存在的元数据痕迹
             # 移除任何包含元数据的部分
-            import re
             cleaned_response = re.sub(r'content=None model=.*? is_end=(True|False)', '', full_response)
             cleaned_response = re.sub(r'model=.*? provider=.*? tokens_used=.*? finish_reason=.*?', '', cleaned_response)
             # 确保移除[DONE]标记
@@ -251,59 +273,71 @@ try:
     # 尝试使用默认配置初始化服务
     llm_service = LLMService()
     
-    # 验证服务是否具有generate_stream方法
-    if not hasattr(llm_service, 'generate_stream'):
-        logger.error("LLMService实例缺少generate_stream方法，正在重新加载")
-        # 如果缺少方法，则重新导入模块并创建实例
-        import importlib
-        import sys
-        # 确保重新加载所有依赖模块
-        for module_name in list(sys.modules.keys()):
-            if module_name.startswith('app.services.llm_service'):
-                del sys.modules[module_name]
+    # 验证服务是否具有generate方法
+    if not hasattr(llm_service, 'generate'):
+        logger.error("LLMService实例缺少generate方法，正在动态添加")
         
         try:
-            # 重新导入模块
-            llm_module = importlib.import_module('app.services.llm_service')
-            # 确保导入了最新的代码
-            importlib.reload(llm_module)
-            # 重新创建实例
-            llm_service = llm_module.LLMService()
+            # 添加应急实现
+            async def emergency_generate(self, messages, config=None):
+                """应急实现的generate方法"""
+                logger.warning("使用应急generate方法")
+                
+                try:
+                    # 检查是否有generate_stream方法
+                    if hasattr(self, "generate_stream"):
+                        # 使用generate_stream实现generate
+                        full_content = ""
+                        model_info = "emergency-model"
+                        provider_info = "emergency-provider"
+                        
+                        # 收集流式响应内容
+                        async for chunk in self.generate_stream(messages, config):
+                            # 收集内容
+                            if hasattr(chunk, 'content') and chunk.content:
+                                full_content += chunk.content
+                            # 获取模型和提供商信息
+                            if hasattr(chunk, 'model') and chunk.model:
+                                model_info = chunk.model
+                            if hasattr(chunk, 'provider') and chunk.provider:
+                                provider_info = chunk.provider
+                        
+                        # 如果没有收集到内容，返回错误消息
+                        if not full_content:
+                            full_content = "使用应急方法未能生成有效内容，请稍后再试"
+                        
+                        logger.info(f"应急generate方法生成内容: {len(full_content)}字符")
+                        
+                        # 返回结果
+                        return {
+                            "content": full_content,
+                            "model": model_info,
+                            "provider": provider_info,
+                            "tokens_used": len(full_content.split()) * 2  # 粗略估计
+                        }
+                    else:
+                        # 如果没有generate_stream方法，返回简单回复
+                        return {
+                            "content": "LLM服务缺少generate和generate_stream方法，无法生成回复。管理员已收到通知。",
+                            "model": "emergency-model",
+                            "provider": "emergency-provider",
+                            "tokens_used": 0
+                        }
+                except Exception as e:
+                    logger.error(f"应急generate方法出错: {str(e)}")
+                    return {
+                        "content": f"生成回复时出错: {str(e)}",
+                        "model": "error-model",
+                        "provider": "error-provider",
+                        "tokens_used": 0
+                    }
             
-            # 再次验证
-            if not hasattr(llm_service, 'generate_stream'):
-                raise AttributeError("重载后的LLMService实例仍然缺少generate_stream方法")
-        except Exception as reload_error:
-            logger.error(f"重新加载LLMService模块失败: {str(reload_error)}")
-            # 直接添加临时实现
-            from typing import List, Dict, Union, AsyncGenerator, Optional
-            async def temp_generate_stream(messages, config=None):
-                """临时实现的generate_stream方法"""
-                # 确保我们使用正确的StreamResponse类
-                from app.services.llm_service import StreamResponse
-                
-                yield StreamResponse(
-                    is_start=True,
-                    model="temp-model",
-                    provider="temp-provider"
-                )
-                
-                yield StreamResponse(
-                    content="LLM服务正在重新配置中，请稍后再试。管理员已收到相关错误通知。",
-                    model="temp-model",
-                    provider="temp-provider"
-                )
-                
-                yield StreamResponse(
-                    is_end=True,
-                    model="temp-model",
-                    provider="temp-provider"
-                )
-            
-            # 添加临时方法到实例
+            # 动态添加方法
             import types
-            llm_service.generate_stream = types.MethodType(temp_generate_stream, llm_service)
-            logger.info("已添加临时generate_stream方法")
+            llm_service.generate = types.MethodType(emergency_generate, llm_service)
+            logger.info("已成功添加应急generate方法到LLM服务")
+        except Exception as add_method_error:
+            logger.error(f"添加应急generate方法失败: {str(add_method_error)}")
     
     logger.info("LLM服务初始化成功")
 except Exception as e:
@@ -422,8 +456,10 @@ async def chat(
                     
                     # 获取用户消息
                     messages = body.get("messages", [])
-                    message = None
-                    if messages:
+                    message = body.get("message")  # 直接支持message参数
+                    
+                    # 如果提供了messages但未提供message，尝试从messages中获取
+                    if messages and not message:
                         for msg in reversed(messages):
                             if msg.get("role") == "user":
                                 message = msg.get("content")
@@ -455,7 +491,15 @@ async def chat(
                     logger.info(f"手动解析JSON: provider={provider}, model={model}, roleid={roleid}, stream={stream}, user_id={user_id}")
                 except Exception as parse_error:
                     logger.error(f"解析JSON请求失败: {str(parse_error)}")
-                    raise HTTPException(status_code=400, detail=f"无效的JSON请求: {str(parse_error)}")
+                    return JSONResponse(
+                        status_code=400,
+                        content={
+                            "content": f"无效的JSON请求: {str(parse_error)}",
+                            "role": "system",
+                            "model": "error-model",
+                            "provider": "error-provider"
+                        }
+                    )
             else:
                 # 使用Pydantic模型
                 provider = chat_request.provider
@@ -497,67 +541,211 @@ async def chat(
         
         # 确保有用户消息
         if message is None:
-            logger.error("请求中没有用户消息")
-            raise HTTPException(status_code=400, detail="请求中必须包含用户消息")
-            
+            logger.warning("请求中缺少用户消息")
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "content": "请求中缺少用户消息",
+                    "role": "system",
+                    "model": "error-model",
+                    "provider": "error-provider"
+                }
+            )
+        
+        # 处理聊天请求
         logger.info(f"处理聊天请求: provider={provider}, model={model}, roleid={roleid}, session_id={session_id}, stream={stream}, selected_username={selected_username}, user_id={user_id}")
         
-        # 获取记忆管理器
+        # 获取内存管理器
         memory_manager = await get_memory_manager()
         
-        # 如果没有会话ID，创建新会话
+        # 如果没有指定session_id，创建一个新的
         if not session_id:
-            # 创建新会话，传递选中的用户名称
             session_id = await memory_manager.start_new_session(user_id, selected_username)
-            logger.info(f"创建新会话: {session_id}, 选中用户名称: {selected_username}")
+            logger.info(f"为用户 {user_id} 创建新会话: {session_id}")
+        
+        # 保存用户消息
+        if stream:
+            logger.info(f"启动流式响应")
             
-            # 创建新的响应流如果是流式请求
-            if stream:
-                response = StreamingResponse(
+            try:
+                # 保存用户消息到会话（异步）
+                logger.info(f"保存用户消息: user_id={user_id}, session_id={session_id}, role=user, roleid={roleid}")
+                await memory_manager.add_message(session_id, user_id, "user", message, roleid)
+                
+                # 处理流式响应
+                return StreamingResponse(
                     stream_response(session_id, user_id, message, roleid, provider, model, temperature, max_tokens),
                     media_type="text/event-stream"
                 )
-                logger.info(f"流式响应创建新会话: {session_id}")
-                return response
-        
-        # 保存用户消息到记忆
-        logger.info(f"保存用户消息: user_id={user_id}, session_id={session_id}, role=user, roleid={roleid}")
-        await memory_manager.add_message(session_id, user_id, "user", message, roleid)
-        
-        if stream:
-            # 返回流式响应
-            response = StreamingResponse(
-                stream_response(session_id, user_id, message, roleid, provider, model, temperature, max_tokens),
-                media_type="text/event-stream"
-            )
-            return response
-        
-        # 获取角色系统提示词和对话历史
-        prompt, history = await prepare_chat_context(session_id, user_id, roleid)
-        
-        # 调用AI服务生成回复
-        ai_service = get_ai_service(provider)
-        response_text = await ai_service.generate_chat_response(
-            prompt=prompt,
-            history=history,
-            model=model,
-            temperature=temperature,
-            max_tokens=max_tokens
+            except Exception as stream_error:
+                logger.error(f"流式响应处理失败: {str(stream_error)}")
+                # 返回一个错误响应
+                return JSONResponse(
+                    status_code=500,
+                    content={
+                        "content": f"服务器处理流式响应时出错: {str(stream_error)}",
+                        "role": "system",
+                        "model": "error-model",
+                        "provider": "error-provider"
+                    }
+                )
+        else:
+            try:
+                # 保存用户消息到会话
+                logger.info(f"保存用户消息: user_id={user_id}, session_id={session_id}, role=user, roleid={roleid}")
+                await memory_manager.add_message(session_id, user_id, "user", message, roleid)
+                
+                # 准备聊天上下文
+                prompt, history = await prepare_chat_context(session_id, user_id, roleid)
+                
+                # 构建消息列表
+                messages_list = []
+                
+                # 如果有prompt，添加为system消息
+                if prompt:
+                    messages_list.append({"role": "system", "content": prompt})
+                
+                # 添加历史消息
+                for msg in history:
+                    messages_list.append(msg)
+                
+                # 添加当前用户消息
+                messages_list.append({"role": "user", "content": message})
+                
+                # 记录发送给LLM的消息列表
+                logger.info(f"发送给LLM的消息数量: {len(messages_list)}")
+                
+                # 检查llm_service是否可用
+                if not llm_service:
+                    logger.error("LLM服务不可用")
+                    return JSONResponse(
+                        status_code=503,
+                        content={
+                            "content": "AI服务当前不可用，请稍后再试",
+                            "role": "system",
+                            "model": "error-model",
+                            "provider": "error-provider"
+                        }
+                    )
+                
+                # 生成回复
+                try:
+                    # 获取API密钥
+                    api_key = None
+                    provider_enum = None
+                    
+                    if provider:
+                        try:
+                            provider_enum = LLMProvider(provider)
+                            # 导入API密钥获取函数
+                            from app.services.llm_service import get_api_key
+                            api_key = get_api_key(provider_enum)
+                            
+                            logger.info(f"获取到API密钥状态: {api_key is not None}, 提供商: {provider}")
+                        except (ValueError, ImportError) as key_error:
+                            logger.error(f"获取API密钥失败: {str(key_error)}")
+                            return JSONResponse(
+                                status_code=503,
+                                content={
+                                    "content": f"API密钥获取失败: {str(key_error)}",
+                                    "role": "system",
+                                    "model": "error-model",
+                                    "provider": "error-provider"
+                                }
+                            )
+                    else:
+                        # 使用默认提供商
+                        provider_enum = LLMProvider.DEEPSEEK if DEEPSEEK_API_KEY else LLMProvider.ZHIPU
+                        api_key = DEEPSEEK_API_KEY if provider_enum == LLMProvider.DEEPSEEK else ZHIPU_API_KEY
+                        provider = provider_enum.value
+                        logger.info(f"使用默认提供商: {provider_enum}, API密钥状态: {api_key is not None}")
+                    
+                    # 如果未提供模型名称，使用默认模型
+                    model_name = model or ("deepseek-chat" if provider_enum == LLMProvider.DEEPSEEK else "glm-4")
+                    
+                    # 确保max_tokens是整数
+                    max_tokens_value = max_tokens or 2000
+                    
+                    # 创建配置对象
+                    config = LLMConfig(
+                        provider=provider_enum,
+                        model_name=model_name,
+                        api_key=api_key,
+                        temperature=temperature,
+                        max_tokens=max_tokens_value
+                    )
+                    
+                    logger.info(f"创建LLM配置: provider={provider_enum}, model={model_name}, temperature={temperature}, max_tokens={max_tokens_value}")
+                    
+                    # 检查generate方法是否存在
+                    if not hasattr(llm_service, "generate"):
+                        logger.error("LLM服务缺少generate方法")
+                        return JSONResponse(
+                            status_code=503,
+                            content={
+                                "content": "AI服务配置错误，请联系管理员",
+                                "role": "system",
+                                "model": "error-model",
+                                "provider": "error-provider"
+                            }
+                        )
+                    
+                    # 调用LLM服务
+                    result = await llm_service.generate(messages_list, config)
+                    
+                    # 获取回复内容
+                    response_text = result.get("content", "AI无法生成回复")
+                    
+                    # 保存AI回复到会话
+                    logger.info(f"保存AI回复: user_id={user_id}, session_id={session_id}, role=assistant, roleid={roleid}")
+                    await memory_manager.add_message(session_id, user_id, "assistant", response_text, roleid)
+                    
+                    # 返回结果
+                    return {
+                        "content": response_text,
+                        "role": "assistant",
+                        "model": result.get("model", model),
+                        "provider": result.get("provider", provider),
+                        "tokens_used": result.get("tokens_used")
+                    }
+                except Exception as llm_error:
+                    logger.error(f"LLM服务调用出错: {str(llm_error)}")
+                    return JSONResponse(
+                        status_code=500,
+                        content={
+                            "content": f"AI生成回复时出错: {str(llm_error)}",
+                            "role": "system",
+                            "model": "error-model", 
+                            "provider": "error-provider"
+                        }
+                    )
+            except Exception as e:
+                logger.error(f"处理聊天请求失败: {str(e)}")
+                import traceback
+                logger.error(traceback.format_exc())
+                return JSONResponse(
+                    status_code=500,
+                    content={
+                        "content": f"服务器处理请求时出错: {str(e)}",
+                        "role": "system",
+                        "model": "error-model",
+                        "provider": "error-provider"
+                    }
+                )
+    except Exception as outer_error:
+        # 捕获所有其他异常
+        logger.error(f"聊天接口出现未处理异常: {str(outer_error)}")
+        import traceback
+        logger.error(traceback.format_exc())
+        return JSONResponse(
+            status_code=500, 
+            content={
+                "content": f"服务器内部错误: {str(outer_error)}",
+                "role": "system",
+                "model": "error-model",
+                "provider": "error-provider"
+            }
         )
-        
-        # 保存AI回复到记忆
-        logger.info(f"保存AI回复: user_id={user_id}, session_id={session_id}, role=assistant, roleid={roleid}")
-        await memory_manager.add_message(session_id, user_id, "assistant", response_text, roleid)
-        
-        # 返回完整响应
-        return {
-            "session_id": session_id,
-            "message": response_text,
-            "created": int(time.time())
-        }
-    except Exception as e:
-        logger.error(f"聊天API错误: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"AI服务错误: {str(e)}")
 
 # 添加对GET请求的支持
 @router.get("/chat")
@@ -601,26 +789,38 @@ async def chat_stream(
         try:
             provider_enum = LLMProvider(provider)
             if provider_enum == LLMProvider.DEEPSEEK and not DEEPSEEK_API_KEY:
+                logger.error("DeepSeek API密钥未配置")
                 return EventSourceResponse(
                     [{"event": "error", "data": "DeepSeek API密钥未配置"}]
                 )
             elif provider_enum == LLMProvider.ZHIPU and not ZHIPU_API_KEY:
+                logger.error("智谱AI API密钥未配置")
                 return EventSourceResponse(
                     [{"event": "error", "data": "智谱AI API密钥未配置"}]
                 )
             
             api_key = DEEPSEEK_API_KEY if provider_enum == LLMProvider.DEEPSEEK else ZHIPU_API_KEY
+            model_name = model or ("deepseek-chat" if provider_enum == LLMProvider.DEEPSEEK else "glm-4")
+            
+            logger.info(f"GET流式响应 - 使用提供商: {provider}, 模型: {model_name}, API密钥状态: {api_key is not None}")
             
             config = LLMConfig(
                 provider=provider_enum,
-                model_name=model or (
-                    "deepseek-chat" if provider_enum == LLMProvider.DEEPSEEK else "glm-4"
-                ),
-                api_key=api_key
+                model_name=model_name,
+                api_key=api_key,
+                max_tokens=2000  # 使用固定值
             )
-        except ValueError:
+            
+            logger.info(f"GET流式响应 - 创建LLM配置: provider={provider_enum.value}, model={model_name}")
+        except ValueError as e:
+            logger.error(f"GET流式响应 - 无效的提供商: {provider}, 错误: {str(e)}")
             return EventSourceResponse(
-                [{"event": "error", "data": f"不支持的LLM提供商: {provider}"}]
+                [{"event": "error", "data": f"不支持的LLM提供商: {provider}，错误: {str(e)}"}]
+            )
+        except Exception as e:
+            logger.error(f"GET流式响应 - 创建配置时出错: {str(e)}")
+            return EventSourceResponse(
+                [{"event": "error", "data": f"创建LLM配置时出错: {str(e)}"}]
             )
     
     # 处理流式响应，传递用户信息
@@ -649,25 +849,54 @@ async def stream_chat(request: ChatRequest, current_user: Dict = Depends(get_cur
     config = None
     if request.model or request.provider:
         try:
-            # 这里获取API密钥
-            api_key = None
-            if request.provider == LLMProvider.DEEPSEEK:
-                api_key = DEEPSEEK_API_KEY
-            elif request.provider == LLMProvider.ZHIPU:
-                api_key = ZHIPU_API_KEY
-                
-            if api_key:
-                config = LLMConfig(
-                    provider=request.provider or llm_service.default_config.provider,
-                    model_name=request.model or llm_service.default_config.model_name,
-                    api_key=api_key,
-                    temperature=request.temperature,
-                    max_tokens=request.max_tokens
-                )
+            # 获取provider枚举
+            provider_enum = None
+            if request.provider:
+                try:
+                    provider_enum = LLMProvider(request.provider)
+                except ValueError:
+                    logger.warning(f"无效的提供商字符串: {request.provider}")
+                    provider_enum = LLMProvider.DEEPSEEK if DEEPSEEK_API_KEY else LLMProvider.ZHIPU
             else:
-                logger.warning(f"未找到所请求提供商的API密钥: {request.provider}")
+                # 使用默认提供商
+                provider_enum = LLMProvider.DEEPSEEK if DEEPSEEK_API_KEY else LLMProvider.ZHIPU
+            
+            # 获取API密钥
+            api_key = None
+            if provider_enum == LLMProvider.DEEPSEEK:
+                api_key = DEEPSEEK_API_KEY
+            elif provider_enum == LLMProvider.ZHIPU:
+                api_key = ZHIPU_API_KEY
+            
+            if not api_key:
+                logger.warning(f"未找到提供商 {provider_enum.value} 的API密钥")
+                
+            # 获取模型名称
+            model_name = request.model or ("deepseek-chat" if provider_enum == LLMProvider.DEEPSEEK else "glm-4")
+            
+            # 确保max_tokens是整数
+            max_tokens_value = request.max_tokens or 2000
+            
+            logger.info(f"流式响应 - 创建配置: provider={provider_enum.value}, model={model_name}, temperature={request.temperature}, max_tokens={max_tokens_value}")
+            
+            config = LLMConfig(
+                provider=provider_enum,
+                model_name=model_name,
+                api_key=api_key or "",  # 提供空字符串而不是None，避免验证错误
+                temperature=request.temperature,
+                max_tokens=max_tokens_value
+            )
         except Exception as e:
-            logger.error(f"构建LLM配置失败: {str(e)}")
+            logger.error(f"构建LLM配置失败: {str(e)}", exc_info=True)
+            # 尝试使用默认配置
+            try:
+                config = llm_service.default_config
+                logger.warning(f"使用默认LLM配置: {config.provider.value}, {config.model_name}")
+            except Exception as default_config_error:
+                logger.error(f"获取默认配置也失败: {str(default_config_error)}")
+    else:
+        # 如果未提供模型或提供商，使用默认配置
+        config = llm_service.default_config
     
     return await handle_stream_chat(request, config, current_user)
 
@@ -836,7 +1065,6 @@ async def handle_stream_chat(request: ChatRequest, config: Optional[LLMConfig] =
                         if current_user and session_id and full_content:
                             try:
                                 # 清理响应中可能存在的元数据痕迹
-                                import re
                                 cleaned_content = re.sub(r'content=None model=.*? is_end=(True|False)', '', full_content)
                                 cleaned_content = re.sub(r'model=.*? provider=.*? tokens_used=.*? finish_reason=.*?', '', cleaned_content)
                                 

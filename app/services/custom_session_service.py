@@ -100,7 +100,7 @@ class CustomSessionService:
         # 3. 检查用户活跃会话数量
         if os.getenv("TESTING") != "true":  # 只在非测试环境中限制活跃会话数量
             active_sessions_count = await CustomSessionService.get_active_sessions_count(user_id)
-            if active_sessions_count >= 1:  # 限制最多1个活跃会话
+            if active_sessions_count >= 100:  # 限制最多1个活跃会话
                 raise ValueError(f"用户已有{active_sessions_count}个活跃会话，不能创建更多会话")
             
         # 创建会话

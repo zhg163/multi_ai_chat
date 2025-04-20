@@ -12,9 +12,31 @@ class MessageService:
     """消息服务类，处理消息的CRUD操作"""
     
     def __init__(self, db=None):
-        """初始化，获取数据库连接"""
-        self.db = db or get_database()
-        self.collection = self.db.messages
+        """初始化，存储数据库连接（如果提供）"""
+        self.db = db
+        self.collection = None
+        self._initialized = False
+    
+    async def initialize(self):
+        """异步初始化，确保数据库连接可用"""
+        if self._initialized:
+            return
+            
+        if not self.db:
+            from ..database.connection import get_database
+            self.db = await get_database()
+            
+        if self.db:
+            self.collection = self.db.messages
+            self._initialized = True
+        else:
+            logger.error("无法获取数据库连接")
+            raise ConnectionError("无法连接到数据库")
+            
+    async def _ensure_initialized(self):
+        """确保服务已初始化"""
+        if not self._initialized:
+            await self.initialize()
     
     async def create_message(
         self, 
@@ -43,6 +65,8 @@ class MessageService:
         Returns:
             创建的消息对象
         """
+        await self._ensure_initialized()
+        
         now = datetime.utcnow()
         message_data = {
             "session_id": session_id,
@@ -81,6 +105,8 @@ class MessageService:
         Returns:
             找到的消息对象，如果不存在则返回None
         """
+        await self._ensure_initialized()
+        
         try:
             message = await self.collection.find_one({"_id": ObjectId(message_id)})
             if not message:
@@ -103,6 +129,8 @@ class MessageService:
         Returns:
             更新后的消息对象，如果不存在则返回None
         """
+        await self._ensure_initialized()
+        
         try:
             update_data["updated_at"] = datetime.utcnow()
             result = await self.collection.find_one_and_update(
@@ -139,6 +167,8 @@ class MessageService:
         Returns:
             消息历史对象，包含总数和消息列表
         """
+        await self._ensure_initialized()
+        
         try:
             # 统计总数
             total = await self.collection.count_documents({"session_id": session_id})
@@ -170,6 +200,8 @@ class MessageService:
         Returns:
             是否成功删除
         """
+        await self._ensure_initialized()
+        
         try:
             result = await self.collection.update_one(
                 {"_id": ObjectId(message_id)},
@@ -190,6 +222,8 @@ class MessageService:
         Returns:
             是否成功删除
         """
+        await self._ensure_initialized()
+        
         try:
             result = await self.collection.delete_one({"_id": ObjectId(message_id)})
             return result.deleted_count > 0
@@ -207,6 +241,8 @@ class MessageService:
         Returns:
             删除的消息数量
         """
+        await self._ensure_initialized()
+        
         try:
             result = await self.collection.update_many(
                 {"session_id": session_id},
@@ -227,6 +263,8 @@ class MessageService:
         Returns:
             删除的消息数量
         """
+        await self._ensure_initialized()
+        
         try:
             result = await self.collection.delete_many({"session_id": session_id})
             return result.deleted_count

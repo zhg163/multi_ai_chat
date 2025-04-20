@@ -33,6 +33,31 @@ class RAGEnhancedService:
         self.api_key = config.RETRIEVAL_API_KEY
         self.ragflow_chat_id = config.RAGFLOW_CHAT_ID
         self.stop_generation = {}  # 存储需要停止生成的消息ID
+        self._initialized = False
+    
+    async def initialize(self):
+        """异步初始化服务"""
+        if self._initialized:
+            return
+            
+        # 初始化消息服务
+        if hasattr(self.message_service, 'initialize'):
+            await self.message_service.initialize()
+            
+        # 初始化会话服务
+        if hasattr(self.session_service, 'initialize'):
+            await self.session_service.initialize()
+            
+        # 初始化角色服务
+        if hasattr(self.role_service, 'initialize'):
+            await self.role_service.initialize()
+            
+        self._initialized = True
+        
+    async def _ensure_initialized(self):
+        """确保服务已初始化"""
+        if not self._initialized:
+            await self.initialize()
     
     async def analyze_question(self, question: str, model: str) -> Tuple[bool, str]:
         """
@@ -45,6 +70,9 @@ class RAGEnhancedService:
         Returns:
             (need_rag, thinking): 是否需要RAG，分析思考过程
         """
+        # 确保服务已初始化
+        await self._ensure_initialized()
+        
         self.logger.info(f"分析问题是否需要RAG: {question[:50]}...")
         
         # 强制使用deepseek-chat模型
@@ -104,6 +132,9 @@ class RAGEnhancedService:
         Returns:
             检索到的文档列表
         """
+        # 确保服务已初始化
+        await self._ensure_initialized()
+        
         self.logger.info(f"从知识库检索内容: {query[:50]}...")
         
         try:
@@ -153,6 +184,8 @@ class RAGEnhancedService:
         Returns:
             格式化后的文档字符串
         """
+        # 注意：此方法不需要确保初始化，因为它不访问数据库
+        
         if not documents:
             return "未找到相关参考资料。"
         
@@ -204,9 +237,34 @@ class RAGEnhancedService:
         Yields:
             流式响应内容
         """
+        # 确保服务已初始化
+        await self._ensure_initialized()
+        
+        # 参数验证
+        if not messages or not isinstance(messages, list) or len(messages) == 0:
+            yield {"error": "消息列表为空或格式错误"}
+            return
+            
+        # 验证必须的消息格式
+        for msg in messages:
+            if not isinstance(msg, dict) or "role" not in msg or "content" not in msg:
+                yield {"error": "消息格式错误，必须包含role和content字段"}
+                return
+        
         # 强制使用deepseek-chat模型
         model = "deepseek-chat"
         
+        # 参数规范化
+        temperature = float(temperature) if temperature is not None else 0.7
+        if temperature < 0 or temperature > 2:
+            temperature = 0.7
+            
+        if max_tokens is not None:
+            max_tokens = int(max_tokens)
+            
+        if context_limit is not None:
+            context_limit = int(context_limit)
+            
         # 生成消息ID
         current_message_id = message_id or str(uuid.uuid4())
         
@@ -258,14 +316,16 @@ class RAGEnhancedService:
         # 如果有角色ID，获取角色系统提示词
         if role_id:
             try:
-                from ..database.connection import get_database
-                from bson.objectid import ObjectId
+                # 确保服务已初始化（特别是角色服务）
+                await self._ensure_initialized()
                 
-                db = await get_database()
-                if db is not None:
-                    role_info = await db.roles.find_one({"_id": ObjectId(role_id)})
-                    if role_info and "system_prompt" in role_info:
-                        system_message = role_info["system_prompt"]
+                # 通过角色服务获取角色系统提示词
+                role_info = await self.role_service.get_role_by_id(role_id)
+                if role_info and isinstance(role_info, dict):
+                    # 使用字典语法获取system_prompt，避免KeyError
+                    system_prompt_value = role_info.get("system_prompt")
+                    if system_prompt_value:
+                        system_message = system_prompt_value
             except Exception as e:
                 self.logger.error(f"获取角色系统提示词失败: {str(e)}")
         
@@ -337,13 +397,19 @@ class RAGEnhancedService:
     
     async def stop_message_generation(self, message_id: str) -> bool:
         """
-        停止特定消息的生成
+        停止指定消息的生成
         
         Args:
             message_id: 消息ID
             
         Returns:
-            是否成功标记为停止
+            是否成功停止生成
         """
+        # 确保服务已初始化
+        await self._ensure_initialized()
+        
+        if message_id not in self.stop_generation:
+            return False
+        
         self.stop_generation[message_id] = True
         return True 

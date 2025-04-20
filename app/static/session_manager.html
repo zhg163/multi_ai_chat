@@ -834,7 +834,7 @@
                 const openBtn = listItem.querySelector('.open-session-btn');
                 openBtn.addEventListener('click', (e) => {
                     e.stopPropagation(); // 阻止事件冒泡
-                    openChatSession(sessionId);
+                    openChatSession(sessionId, userName, userId);
                 });
                 
                 // 添加删除会话的事件监听器
@@ -848,7 +848,7 @@
                 
                 // 点击整个会话项也可以打开会话
                 listItem.addEventListener('click', () => {
-                    openChatSession(sessionId);
+                    openChatSession(sessionId, userName, userId);
                 });
                 
                 sessionList.appendChild(listItem);
@@ -863,16 +863,16 @@
         }
         
         // 打开聊天会话
-        function openChatSession(sessionId) {
+        function openChatSession(sessionId, userName, userId) {
             if (!sessionId) {
                 console.error('无效的会话ID');
                 return;
             }
             
-            console.log(`打开会话: ${sessionId}`);
+            console.log(`打开会话: ${sessionId}, 用户: ${userName}, 用户ID: ${userId}`);
             
-            // 跳转到聊天页面，携带会话ID参数
-            window.location.href = `/chat/${sessionId}`;
+            // 跳转到RAG聊天页面，携带会话ID、用户名和用户ID参数
+            window.location.href = `/static/rag-chat.html?session_id=${encodeURIComponent(sessionId)}&userName=${encodeURIComponent(userName)}&userId=${encodeURIComponent(userId)}`;
         }
         
         // 删除会话

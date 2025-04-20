@@ -410,6 +410,15 @@ async def startup_event():
             logger.info("嵌入服务初始化完成")
         except Exception as e:
             logger.error(f"嵌入服务初始化失败: {str(e)}")
+        
+        # 初始化RAG增强服务
+        try:
+            from app.services.rag_enhanced_service import RAGEnhancedService
+            rag_service = RAGEnhancedService()
+            await rag_service.initialize()
+            logger.info("RAG增强服务初始化完成")
+        except Exception as e:
+            logger.error(f"RAG增强服务初始化失败: {str(e)}")
             
         # 初始化记忆模块
         try:

@@ -12,7 +12,7 @@
             background-color: #f5f5f5;
             color: #333;
         }
-        
+
         .container {
             max-width: 1000px;
             margin: 0 auto;
@@ -21,7 +21,7 @@
             flex-direction: column;
             height: 100vh;
         }
-        
+
         header {
             display: flex;
             justify-content: space-between;
@@ -29,26 +29,26 @@
             padding: 10px 0;
             border-bottom: 1px solid #e0e0e0;
         }
-        
+
         .controls-container {
             display: flex;
             gap: 15px;
             align-items: center;
         }
-        
+
         main {
             flex: 1;
             display: flex;
             overflow: hidden;
         }
-        
+
         .chat-container {
             flex: 1;
             display: flex;
             flex-direction: column;
             height: 100%;
         }
-        
+
         .messages-container {
             flex: 1;
             overflow-y: auto;
@@ -60,7 +60,7 @@
             border-radius: 5px;
             box-shadow: 0 2px 10px rgba(0,0,0,0.05);
         }
-        
+
         .message {
             max-width: 80%;
             padding: 10px 15px;
@@ -68,53 +68,68 @@
             margin-bottom: 5px;
             white-space: pre-wrap;
         }
-        
+
         .message.user {
             align-self: flex-end;
             background-color: #e3f2fd;
             border-bottom-right-radius: 0;
         }
-        
+
         .message.assistant {
             align-self: flex-start;
             background-color: #f5f5f5;
             border-bottom-left-radius: 0;
         }
-        
+
         .message.system {
             align-self: center;
             background-color: #fff3e0;
             font-style: italic;
             max-width: 90%;
         }
-        
+
         .message-content {
             word-break: break-word;
         }
-        
+
+        .message-sender {
+            font-size: 12px;
+            color: #666;
+            margin-bottom: 4px;
+            font-weight: bold;
+        }
+
+        .message.user .message-sender {
+            text-align: right;
+        }
+
+        .message.assistant .message-sender {
+            text-align: left;
+        }
+
         .thinking-section {
             border-left: 3px solid #673ab7;
             padding-left: 10px;
             margin-bottom: 15px;
         }
-        
+
         .answer-section {
             border-left: 3px solid #4caf50;
             padding-left: 10px;
         }
-        
+
         .section-title {
             font-weight: bold;
             color: #1976d2;
             margin: 5px 0;
         }
-        
+
         .process-marker {
             color: #757575;
             font-style: italic;
             margin: 5px 0;
         }
-        
+
         .input-container {
             padding: 15px;
             display: flex;
@@ -125,7 +140,7 @@
             box-shadow: 0 2px 10px rgba(0,0,0,0.05);
             margin-top: 20px;
         }
-        
+
         textarea {
             padding: 12px;
             border: 1px solid #ddd;
@@ -135,12 +150,12 @@
             font-family: inherit;
             font-size: 14px;
         }
-        
+
         .input-controls {
             display: flex;
             justify-content: space-between;
         }
-        
+
         button {
             padding: 8px 15px;
             border: none;
@@ -149,30 +164,30 @@
             font-size: 14px;
             transition: background-color 0.3s;
         }
-        
+
         button:disabled {
             cursor: not-allowed;
             opacity: 0.6;
         }
-        
+
         #send-button {
             background-color: #1976d2;
             color: white;
         }
-        
+
         #send-button:hover {
             background-color: #1565c0;
         }
-        
+
         #stop-btn {
             background-color: #f44336;
             color: white;
         }
-        
+
         #stop-btn:hover {
             background-color: #d32f2f;
         }
-        
+
         .references-container {
             margin-top: 15px;
             padding: 10px;
@@ -180,41 +195,41 @@
             border-radius: 5px;
             border-left: 3px solid #ff9800;
         }
-        
+
         .references-header {
             font-weight: bold;
             margin-bottom: 10px;
             color: #e65100;
         }
-        
+
         .reference-item {
             margin-bottom: 10px;
             padding-bottom: 10px;
             border-bottom: 1px solid #eee;
         }
-        
+
         .reference-title {
             font-weight: bold;
         }
-        
+
         .reference-content {
             margin: 5px 0;
             font-style: italic;
             color: #555;
         }
-        
+
         .reference-meta {
             font-size: 12px;
             color: #757575;
         }
-        
+
         .collapsible {
             margin: 10px 0;
             border: 1px solid #ddd;
             border-radius: 5px;
             overflow: hidden;
         }
-        
+
         .collapsible-header {
             padding: 10px;
             background-color: #f5f5f5;
@@ -222,16 +237,16 @@
             display: flex;
             align-items: center;
         }
-        
+
         .toggle-icon {
             margin-left: auto;
         }
-        
+
         .collapsible-content {
             padding: 10px;
             background-color: #fff;
         }
-        
+
         .collapsible.collapsed .collapsible-content {
             display: none;
         }
@@ -241,72 +256,86 @@
     <div class="container">
         <header>
             <div style="display: flex; align-items: center;">
-                <a href="/static/session_manager.html" class="back-link">← 返回会话列表</a>
-                <h1>DeepSeek RAG增强聊天</h1>
-            </div>
-            <div class="controls-container">
-                <button id="stop-btn" disabled>停止生成</button>
+                <a href="/static/session_manager.html" class="back-link" style="font-size: 0.8em;">← 返回会话列表</a>
+                <h1 style="font-size: 0.9em; margin-left: 10px;" id="session-title"></h1>
             </div>
         </header>
         <main>
             <div class="chat-container">
                 <div class="messages-container" id="messages-container">
-                    <div class="message system">
-                        <div class="message-content">
-                            欢迎使用 DeepSeek RAG 增强聊天！这是一个支持知识检索的聊天系统，能够从文档库中检索相关信息来回答您的问题。
-                        </div>
-                    </div>
                 </div>
                 <div class="input-container">
                     <textarea id="user-input" placeholder="输入您的问题..." rows="3"></textarea>
                     <div class="input-controls">
                         <div></div>
-                        <button id="send-button">发送</button>
+                        <div style="display: flex; gap: 10px;">
+                            <button id="stop-btn" disabled style="background-color: #f44336; color: white;">停止生成</button>
+                            <button id="send-button">发送</button>
+                        </div>
                     </div>
                 </div>
             </div>
         </main>
     </div>
-    
+
     <script>
         const messagesContainer = document.getElementById('messages-container');
         const userInput = document.getElementById('user-input');
         const sendButton = document.getElementById('send-button');
         const stopButton = document.getElementById('stop-btn');
-        
+
         // 全局变量
         let isWaitingForResponse = false;
         let currentMessages = [];
         let currentMessageId = null;
         let currentSessionId = null; // 存储当前会话ID
         let isLoadingHistory = false; // 标记是否正在加载历史消息
-        
+        let currentUserName = '用户'; // 默认用户名
+
         // 初始化
         document.addEventListener('DOMContentLoaded', function() {
-            // 获取URL参数中的session_id
+            // 获取URL参数
             const urlParams = new URLSearchParams(window.location.search);
             currentSessionId = urlParams.get('session_id');
-            
+            const userId = urlParams.get('user_id');
+            const userName = urlParams.get('user_name');
+
+            // 设置当前用户名
+            if (userName) {
+                currentUserName = decodeURIComponent(userName);
+            }
+
+            // 更新页面标题，显示完整会话ID和用户名
             if (currentSessionId) {
-                console.log(`已加载会话: ${currentSessionId}`);
-                document.querySelector('header h1').innerText = `DeepSeek RAG增强聊天 (会话ID: ${currentSessionId.substring(0, 8)}...)`;
-                
+                let title = ``;
+
+                // 显示完整会话ID
+                title += `(会话: ${currentSessionId}) `;
+
+                // 如果有用户名，显示用户名
+                if (userName) {
+                    title += `用户: ${currentUserName}`;
+                }
+
+                document.getElementById('session-title').innerText = title;
+                console.log(`已加载会话: ${currentSessionId}, 用户: ${currentUserName}`);
+
                 // 尝试加载历史消息
-                loadSessionMessages();
+                loadSessionMessages(userId);
             } else {
                 console.warn('未提供会话ID，将使用临时会话');
-                
+
                 // 初始系统消息
                 currentMessages.push({
                     role: 'system',
                     content: '你是一个知识渊博、乐于助人的AI助手。'
                 });
             }
-            
+
             // 添加事件监听器
             sendButton.addEventListener('click', sendMessage);
             stopButton.addEventListener('click', stopGeneration);
-            
+
             // 添加输入框回车事件
             userInput.addEventListener('keydown', function(e) {
                 if (e.key === 'Enter' && !e.shiftKey) {
@@ -315,126 +344,160 @@
                 }
             });
         });
-        
+
         // 加载会话历史消息
-        async function loadSessionMessages() {
+        async function loadSessionMessages(userId) {
             if (!currentSessionId || isLoadingHistory) return;
-            
+
             isLoadingHistory = true;
-            
+
             try {
                 // 显示加载中
                 const loadingElement = document.createElement('div');
                 loadingElement.className = 'message system';
                 loadingElement.innerHTML = '<div class="message-content">加载历史消息中...</div>';
                 messagesContainer.appendChild(loadingElement);
-                
+
                 // 调用API获取会话详情
                 const sessionResponse = await fetch(`/api/memory/session/${currentSessionId}`);
-                
+
                 if (!sessionResponse.ok) {
                     throw new Error(`获取会话详情失败: ${sessionResponse.status}`);
                 }
-                
+
                 const sessionData = await sessionResponse.json();
-                
+
                 if (!sessionData.success || !sessionData.session) {
                     throw new Error('会话数据加载失败');
                 }
-                
+
                 // 获取会话消息
-                const messagesResponse = await fetch(`/api/memory/session/${currentSessionId}/messages`);
-                
+                let messagesResponse;
+                // 如果提供了用户ID，使用它构建请求
+                if (userId) {
+                    messagesResponse = await fetch(`/api/memory/messages/${userId}/${currentSessionId}`);
+                } else {
+                    messagesResponse = await fetch(`/api/memory/session/${currentSessionId}/messages`);
+                }
+
                 if (!messagesResponse.ok) {
                     // 尝试使用备用API
-                    const fallbackResponse = await fetch(`/api/messages/session/${currentSessionId}`);
-                    
+                    let fallbackResponse;
+                    if (userId) {
+                        fallbackResponse = await fetch(`/api/messages/${userId}/${currentSessionId}`);
+                    } else {
+                        fallbackResponse = await fetch(`/api/messages/session/${currentSessionId}`);
+                    }
+
                     if (!fallbackResponse.ok) {
                         throw new Error(`获取会话消息失败: ${messagesResponse.status}`);
                     }
-                    
+
                     const fallbackData = await fallbackResponse.json();
                     processMessages(fallbackData.messages || []);
                 } else {
                     const messagesData = await messagesResponse.json();
                     processMessages(messagesData.messages || []);
                 }
-                
+
                 // 移除加载消息
                 messagesContainer.removeChild(loadingElement);
-                
+
                 // 滚动到底部
                 scrollToBottom();
-                
+
             } catch (error) {
                 console.error('加载历史消息失败:', error);
-                
+
                 // 显示错误消息
                 const errorElement = document.createElement('div');
                 errorElement.className = 'message system';
                 errorElement.innerHTML = `<div class="message-content">加载历史消息失败: ${error.message}</div>`;
-                
+
                 // 移除加载消息（如果存在）
                 const loadingElement = messagesContainer.querySelector('.message.system:last-child');
                 if (loadingElement && loadingElement.textContent.includes('加载历史消息中')) {
                     messagesContainer.removeChild(loadingElement);
                 }
-                
+
                 messagesContainer.appendChild(errorElement);
-                
+
                 // 添加系统消息到当前会话
                 currentMessages.push({
                     role: 'system',
                     content: '你是一个知识渊博、乐于助人的AI助手。'
                 });
-                
+
             } finally {
                 isLoadingHistory = false;
             }
         }
-        
+
         // 处理历史消息数据
         function processMessages(messages) {
             // 清空消息容器
             messagesContainer.innerHTML = '';
-            
+
             // 重置当前消息数组
             currentMessages = [];
-            
+
             // 添加系统消息
             currentMessages.push({
                 role: 'system',
                 content: '你是一个知识渊博、乐于助人的AI助手。'
             });
-            
-            // 如果没有消息，显示欢迎消息
+
+            // 如果没有消息，直接返回
             if (!messages || messages.length === 0) {
-                const welcomeElement = document.createElement('div');
-                welcomeElement.className = 'message system';
-                welcomeElement.innerHTML = `
-                    <div class="message-content">
-                        欢迎使用 DeepSeek RAG 增强聊天！这是一个支持知识检索的聊天系统，能够从文档库中检索相关信息来回答您的问题。
-                    </div>
-                `;
-                messagesContainer.appendChild(welcomeElement);
                 return;
             }
-            
+
             // 按时间排序消息（确保最老的消息先显示）
             messages.sort((a, b) => {
                 const timeA = new Date(a.timestamp || a.created_at || 0);
                 const timeB = new Date(b.timestamp || b.created_at || 0);
                 return timeA - timeB;
             });
-            
+
             // 遍历消息并添加到UI
             messages.forEach(msg => {
                 // 确定角色
                 let role = msg.role || (msg.is_user ? 'user' : 'assistant');
-                
-                // 添加到UI
-                addMessageToUI(role, msg.content);
-                
+
+                // 获取发送者名称（如果有的话）
+                let senderName = null;
+                if (role === 'user') {
+                    // 尝试从消息中获取用户名
+                    senderName = msg.user_name || msg.sender || currentUserName;
+                } else if (role === 'assistant') {
+                    senderName = msg.assistant_name || 'DeepSeek AI';
+                }
+
+                // 创建消息元素
+                const messageElement = document.createElement('div');
+                messageElement.className = `message ${role}`;
+
+                // 添加发送者名称（如果不是系统消息）
+                if (role !== 'system' && senderName) {
+                    const senderElement = document.createElement('div');
+                    senderElement.className = 'message-sender';
+                    senderElement.textContent = senderName;
+                    messageElement.appendChild(senderElement);
+                }
+
+                // 添加消息内容
+                const contentElement = document.createElement('div');
+                contentElement.className = 'message-content';
+
+                if (role === 'assistant') {
+                    contentElement.innerHTML = formatAssistantContent(msg.content);
+                } else {
+                    contentElement.textContent = msg.content;
+                }
+
+                messageElement.appendChild(contentElement);
+                messagesContainer.appendChild(messageElement);
+
                 // 添加到当前消息数组（用于API调用）
                 if (role !== 'system') {
                     currentMessages.push({
@@ -443,35 +506,42 @@
                     });
                 }
             });
+
+            // 滚动到底部
+            scrollToBottom();
         }
-        
+
         // 发送消息
         async function sendMessage() {
             const userMessage = userInput.value.trim();
-            
+
             if (!userMessage || isWaitingForResponse) return;
-            
+
             // 添加用户消息到UI
             addMessageToUI('user', userMessage);
-            
+
             // 添加到消息历史
             currentMessages.push({
                 role: 'user',
                 content: userMessage
             });
-            
+
             // 清空输入框并更新状态
             userInput.value = '';
             isWaitingForResponse = true;
             sendButton.disabled = true;
-            
+
             // 添加助手响应框
             const assistantMessageElement = addMessageToUI('assistant', '');
-            
+
             try {
+                // 获取URL参数中的用户ID
+                const urlParams = new URLSearchParams(window.location.search);
+                const userId = urlParams.get('user_id');
+
                 // 生成消息ID
                 currentMessageId = Date.now().toString(36) + Math.random().toString(36).substring(2, 9);
-                
+
                 // 准备请求参数
                 const requestData = {
                     messages: currentMessages,
@@ -479,12 +549,17 @@
                     temperature: 0.7,
                     message_id: currentMessageId
                 };
-                
+
                 // 如果有会话ID，添加到请求参数中
                 if (currentSessionId) {
                     requestData.session_id = currentSessionId;
                 }
-                
+
+                // 如果有用户ID，添加到请求参数中
+                if (userId) {
+                    requestData.user_id = userId;
+                }
+
                 // 调用RAG增强聊天API
                 const response = await fetch('/api/llm/chatrag', {
                     method: 'POST',
@@ -493,33 +568,33 @@
                     },
                     body: JSON.stringify(requestData)
                 });
-                
+
                 if (!response.ok) {
                     throw new Error(`API错误: ${response.status}`);
                 }
-                
+
                 // 启用停止按钮
                 stopButton.disabled = false;
-                
+
                 // 解析流式响应
                 const reader = response.body.getReader();
                 const decoder = new TextDecoder();
                 let responseText = '';
                 let references = null;
-                
+
                 // 处理流式响应
                 while (true) {
                     const { value, done } = await reader.read();
-                    
+
                     if (done) break;
-                    
+
                     const chunk = decoder.decode(value, { stream: true });
                     const lines = chunk.split('\n');
-                    
+
                     for (const line of lines) {
                         if (line.startsWith('data: ') && line.length > 6) {
                             const data = line.substring(5);
-                            
+
                             // 检查是否为结束标记
                             if (data.trim() === '[DONE]') {
                                 isWaitingForResponse = false;
@@ -527,10 +602,10 @@
                                 stopButton.disabled = true;
                                 break;
                             }
-                            
+
                             try {
                                 const parsedData = JSON.parse(data);
-                                
+
                                 // 处理不同类型的响应
                                 if (parsedData.choices && parsedData.choices.length > 0) {
                                     // 流式内容更新
@@ -557,12 +632,12 @@
                         }
                     }
                 }
-                
+
                 // 添加引用信息（如果有）
                 if (references) {
                     showReferences(references, assistantMessageElement);
                 }
-                
+
                 // 添加到消息历史
                 if (responseText) {
                     currentMessages.push({
@@ -570,40 +645,49 @@
                         content: responseText
                     });
                 }
-                
+
                 // 重置状态
                 isWaitingForResponse = false;
                 sendButton.disabled = false;
                 stopButton.disabled = true;
-                
+
                 // 滚动到底部
                 scrollToBottom();
-                
+
             } catch (error) {
                 console.error('发送消息失败:', error);
                 assistantMessageElement.textContent = `发送消息失败: ${error.message}`;
-                
+
                 // 重置状态
                 isWaitingForResponse = false;
                 sendButton.disabled = false;
                 stopButton.disabled = true;
             }
         }
-        
+
         // 停止生成
         async function stopGeneration() {
             if (!currentMessageId) return;
-            
+
             try {
+                // 获取URL参数中的用户ID
+                const urlParams = new URLSearchParams(window.location.search);
+                const userId = urlParams.get('user_id');
+
                 const requestData = {
                     message_id: currentMessageId
                 };
-                
+
                 // 如果有会话ID，添加到请求参数中
                 if (currentSessionId) {
                     requestData.session_id = currentSessionId;
                 }
-                
+
+                // 如果有用户ID，添加到请求参数中
+                if (userId) {
+                    requestData.user_id = userId;
+                }
+
                 const response = await fetch('/api/llm/chatrag/stop', {
                     method: 'POST',
                     headers: {
@@ -611,54 +695,70 @@
                     },
                     body: JSON.stringify(requestData)
                 });
-                
+
                 if (!response.ok) {
                     throw new Error(`API错误: ${response.status}`);
                 }
-                
+
                 // 禁用停止按钮
                 stopButton.disabled = true;
             } catch (error) {
                 console.error('停止生成失败:', error);
             }
         }
-        
+
         // 添加消息到UI
         function addMessageToUI(role, content) {
             const messageElement = document.createElement('div');
             messageElement.className = `message ${role}`;
-            
+
+            // 创建发送人元素
+            const senderElement = document.createElement('div');
+            senderElement.className = 'message-sender';
+
+            // 根据角色设置发送人名称
+            if (role === 'user') {
+                senderElement.textContent = currentUserName;
+            } else if (role === 'assistant') {
+                senderElement.textContent = 'DeepSeek AI';
+            }
+
+            // 只为用户和助手消息添加发送人
+            if (role === 'user' || role === 'assistant') {
+                messageElement.appendChild(senderElement);
+            }
+
             const contentElement = document.createElement('div');
             contentElement.className = 'message-content';
-            
+
             if (role === 'assistant') {
                 contentElement.innerHTML = formatAssistantContent(content);
             } else {
                 contentElement.textContent = content;
             }
-            
+
             messageElement.appendChild(contentElement);
             messagesContainer.appendChild(messageElement);
-            
+
             // 滚动到底部
             scrollToBottom();
-            
+
             return messageElement;
         }
-        
+
         // 更新助手消息内容
         function updateAssistantMessage(element, content) {
             const contentElement = element.querySelector('.message-content');
             contentElement.innerHTML = formatAssistantContent(content);
-            
+
             // 滚动到底部
             scrollToBottom();
         }
-        
+
         // 格式化助手内容（支持基本Markdown）
         function formatAssistantContent(content) {
             if (!content) return '';
-            
+
             // 转义HTML
             let formatted = content
                 .replace(/&/g, '&amp;')
@@ -666,69 +766,69 @@
                 .replace(/>/g, '&gt;')
                 .replace(/"/g, '&quot;')
                 .replace(/'/g, '&#039;');
-            
+
             // 简单的Markdown支持
             // 代码块 ```code```
             formatted = formatted.replace(/```([\s\S]*?)```/g, '<pre><code>$1</code></pre>');
-            
+
             // 行内代码 `code`
             formatted = formatted.replace(/`([^`]+)`/g, '<code>$1</code>');
-            
+
             // 粗体 **text**
             formatted = formatted.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
-            
+
             // 斜体 *text*
             formatted = formatted.replace(/\*(.*?)\*/g, '<em>$1</em>');
-            
+
             // 换行
             formatted = formatted.replace(/\n/g, '<br>');
-            
+
             return formatted;
         }
-        
+
         // 显示引用信息
         function showReferences(references, messageElement) {
             // 创建引用容器
             const referencesContainer = document.createElement('div');
             referencesContainer.className = 'references-container';
-            
+
             // 添加标题
             const headerElement = document.createElement('div');
             headerElement.className = 'references-header';
             headerElement.textContent = '参考资料';
             referencesContainer.appendChild(headerElement);
-            
+
             // 添加引用列表
             references.forEach((ref, index) => {
                 const refElement = document.createElement('div');
                 refElement.className = 'reference-item';
-                
+
                 // 添加标题
                 const titleElement = document.createElement('div');
                 titleElement.className = 'reference-title';
                 titleElement.textContent = `[${index + 1}] ${ref.title || '未知来源'}`;
                 refElement.appendChild(titleElement);
-                
+
                 // 添加内容
                 const contentElement = document.createElement('div');
                 contentElement.className = 'reference-content';
                 contentElement.textContent = ref.content || ref.text || '';
                 refElement.appendChild(contentElement);
-                
+
                 referencesContainer.appendChild(refElement);
             });
-            
+
             // 添加到消息元素
             messageElement.appendChild(referencesContainer);
-            
+
             // 滚动到底部
             scrollToBottom();
         }
-        
+
         // 滚动到底部
         function scrollToBottom() {
             messagesContainer.scrollTop = messagesContainer.scrollHeight;
         }
     </script>
 </body>
-</html> 
+</html>

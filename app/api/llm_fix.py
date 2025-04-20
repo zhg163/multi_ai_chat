@@ -11,10 +11,8 @@ from datetime import datetime
 from fastapi import APIRouter, HTTPException, Depends, Request, Response, Body, Form, Query
 from fastapi.responses import JSONResponse, StreamingResponse
 
-# 配置日志
-logging.basicConfig(level=logging.INFO, 
-                    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-logger = logging.getLogger(__name__)
+# 获取logger
+logger = logging.getLogger('app.api.llm_fix')
 
 # 创建路由器并指定前缀
 router = APIRouter(prefix="/api/llm", tags=["llm_fix"])

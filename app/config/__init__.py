@@ -21,6 +21,14 @@ from app.config.memory_settings import (
     MAX_TOKENS
 )
 
+# 导入RAG相关配置
+from app.config.defaults import (
+    RETRIEVAL_SERVICE_URL,
+    RETRIEVAL_API_KEY,
+    RAGFLOW_CHAT_ID,
+    RAG_ENABLED_MODELS
+)
+
 # 为了向后兼容，将重要的配置直接暴露在模块级别
 memory_settings = {
     # 记忆配置项
@@ -45,4 +53,45 @@ memory_settings = {
     "SUMMARY_PROMPT_TEMPLATE": SUMMARY_PROMPT_TEMPLATE,
     "DEFAULT_SUMMARY": DEFAULT_SUMMARY,
     "MAX_TOKENS": MAX_TOKENS
-} 
+}
+
+# 创建Config类作为访问配置的统一接口
+class Config:
+    """应用配置类"""
+    
+    # 基础配置
+    DEBUG = True
+    
+    # RAG服务配置
+    RETRIEVAL_SERVICE_URL = RETRIEVAL_SERVICE_URL
+    RETRIEVAL_API_KEY = RETRIEVAL_API_KEY
+    RAGFLOW_CHAT_ID = RAGFLOW_CHAT_ID
+    
+    # 启用RAG功能的模型列表
+    RAG_ENABLED_MODELS = RAG_ENABLED_MODELS
+    
+    # 需要维护与memory_settings一致的设置项，确保兼容
+    @property
+    def MONGO_URI(self):
+        from app.config.memory_settings import MONGO_URI
+        return MONGO_URI
+    
+    @property
+    def MONGO_DB_NAME(self):
+        from app.config.memory_settings import MONGO_DB_NAME
+        return MONGO_DB_NAME
+    
+    @property
+    def REDIS_HOST(self):
+        return REDIS_HOST
+    
+    @property
+    def REDIS_PORT(self):
+        return REDIS_PORT
+    
+    @property
+    def REDIS_PASSWORD(self):
+        return REDIS_PASSWORD
+
+# 创建配置实例
+config = Config() 

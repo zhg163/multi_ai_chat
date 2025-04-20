@@ -26,3 +26,41 @@ class MemorySettings(BaseSettings):
     VECTOR_SIMILARITY: str = "cosine"  # 向量相似度计算方法
 
 memory_settings = MemorySettings() 
+
+class Config:
+    """应用配置类"""
+    
+    # 基础配置
+    DEBUG: bool = os.getenv("DEBUG", "True") == "True"
+    
+    # RAG服务配置
+    RETRIEVAL_SERVICE_URL: str = os.getenv("RETRIEVAL_SERVICE_URL", "http://localhost:9222/api/chat")
+    RETRIEVAL_API_KEY: str = os.getenv("RETRIEVAL_API_KEY", "")
+    RAGFLOW_CHAT_ID: str = os.getenv("RAGFLOW_CHAT_ID", "ragflow-default")
+    
+    # 启用RAG功能的模型列表
+    RAG_ENABLED_MODELS: list = ["gpt-3.5-turbo", "gpt-4", "deepseek-chat"]
+    
+    # 需要维护与memory_settings一致的设置项，确保兼容
+    @property
+    def MONGO_URI(self):
+        return memory_settings.MONGO_URI
+    
+    @property
+    def MONGO_DB_NAME(self):
+        return memory_settings.MONGO_DB_NAME
+    
+    @property
+    def REDIS_HOST(self):
+        return memory_settings.REDIS_HOST
+    
+    @property
+    def REDIS_PORT(self):
+        return memory_settings.REDIS_PORT
+    
+    @property
+    def REDIS_PASSWORD(self):
+        return memory_settings.REDIS_PASSWORD
+
+# 创建配置实例
+config = Config() 

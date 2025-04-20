@@ -157,3 +157,55 @@ class CustomSessionService:
         """
         session = await CustomSession.get_session_by_id(session_id)
         return session is not None 
+    
+    @staticmethod
+    async def get_all_sessions(page: int, limit: int, status: Optional[int] = None) -> tuple[list, int]:
+        skip = (page - 1) * limit
+        query = {"session_status": status} if status is not None else {}
+        collection = await CustomSession.get_collection()
+        
+        sessions = await collection.find(query).skip(skip).limit(limit).to_list(limit)
+        total = await collection.count_documents(query)
+        
+        for session in sessions:
+            session['_id'] = str(session['_id'])
+            session['created_at'] = session['created_at'].isoformat()
+            session['updated_at'] = session['updated_at'].isoformat()
+        
+        return sessions, total
+
+    @staticmethod
+    async def delete_session(session_id: str) -> bool:
+        """
+        删除指定ID的会话，同时从Redis和MongoDB中删除数据
+        
+        参数:
+            session_id: 要删除的会话ID
+            
+        返回:
+            删除操作是否成功
+        """
+        try:
+            logger.info(f"正在删除会话: {session_id}")
+            
+            # 首先检查会话是否存在
+            session = await CustomSession.get_session_by_id(session_id)
+            if not session:
+                logger.warning(f"尝试删除不存在的会话: {session_id}")
+                return False
+            
+            # 从MongoDB删除会话
+            mongo_deleted = await CustomSession.delete_from_mongodb(session_id)
+            
+            # 从Redis删除会话缓存
+            redis_deleted = await CustomSession.delete_from_redis(session_id)
+            
+            # 记录删除结果
+            logger.info(f"会话删除结果 - MongoDB: {mongo_deleted}, Redis: {redis_deleted}")
+            
+            # 只要有一个存储删除成功就返回True
+            return mongo_deleted or redis_deleted
+            
+        except Exception as e:
+            logger.error(f"删除会话时发生错误: {e}")
+            return False

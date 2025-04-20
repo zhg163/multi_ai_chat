@@ -109,4 +109,15 @@ DEFAULT_USER = {
     "description": "临时访客用户",
     "tags": ["访客"],
     "is_active": True
-} 
+}
+
+# 添加RAG服务配置
+import os
+
+# RAG服务配置
+RETRIEVAL_SERVICE_URL = os.getenv("RETRIEVAL_SERVICE_URL", "http://localhost:9222/api/chat")
+RETRIEVAL_API_KEY = os.getenv("RETRIEVAL_API_KEY", "")
+RAGFLOW_CHAT_ID = os.getenv("RAGFLOW_CHAT_ID", "ragflow-default")
+
+# 启用RAG功能的模型列表
+RAG_ENABLED_MODELS = ["deepseek-chat"] 

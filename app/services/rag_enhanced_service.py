@@ -241,13 +241,13 @@ class RAGEnhancedService:
         await self._ensure_initialized()
         
         # 参数验证
-        if not messages or not isinstance(messages, list) or len(messages) == 0:
+        if messages is None or not isinstance(messages, list) or len(messages) == 0:
             yield {"error": "消息列表为空或格式错误"}
             return
             
         # 验证必须的消息格式
         for msg in messages:
-            if not isinstance(msg, dict) or "role" not in msg or "content" not in msg:
+            if msg is None or not isinstance(msg, dict) or "role" not in msg or "content" not in msg:
                 yield {"error": "消息格式错误，必须包含role和content字段"}
                 return
         
@@ -268,6 +268,60 @@ class RAGEnhancedService:
         # 生成消息ID
         current_message_id = message_id or str(uuid.uuid4())
         
+        # 加载短期记忆（会话历史）
+        if session_id and user_id:
+            try:
+                # 尝试从消息服务加载历史消息
+                history_messages = []
+                history_response = await self.message_service.get_session_messages(
+                    session_id=session_id,
+                    limit=context_limit or 20,  # 默认加载最近20条消息
+                    sort_order="asc"  # 按时间升序排列
+                )
+                
+                if history_response and history_response.items:
+                    self.logger.info(f"已加载会话 {session_id} 的 {len(history_response.items)} 条历史消息")
+                    
+                    # 将历史消息转换为LLM格式
+                    for msg in history_response.items:
+                        if msg.status == "DELETED":
+                            continue  # 跳过已删除消息
+                            
+                        role = "user" if msg.message_type == "USER" else "assistant"
+                        history_messages.append({
+                            "role": role,
+                            "content": msg.content
+                        })
+                    
+                    # 如果有系统消息，保留传入消息中的系统消息
+                    system_message = next((msg for msg in messages if msg.get("role") == "system"), None)
+                    
+                    if system_message:
+                        # 如果传入消息中有系统消息，将其添加到历史的开头
+                        history_messages = [system_message] + [
+                            msg for msg in history_messages if msg["role"] != "system"
+                        ]
+                    
+                    # 合并历史和当前消息，确保不重复
+                    current_user_message = next((msg for msg in reversed(messages) if msg.get("role") == "user"), None)
+                    
+                    if current_user_message:
+                        # 检查最后一条历史消息是否与当前用户消息重复
+                        last_history_msg = next((msg for msg in reversed(history_messages) if msg["role"] == "user"), None)
+                        
+                        if not last_history_msg or last_history_msg["content"] != current_user_message["content"]:
+                            # 当前用户消息不在历史中，添加到消息列表
+                            history_messages.append(current_user_message)
+                    
+                    # 使用加载的历史记录替代传入的消息
+                    messages = history_messages
+                    self.logger.info(f"已合并历史记忆，最终消息数: {len(messages)}")
+                else:
+                    self.logger.info(f"会话 {session_id} 没有历史消息或加载失败")
+            except Exception as e:
+                self.logger.error(f"加载短期记忆失败: {str(e)}")
+                # 继续使用传入的消息，不中断处理
+        
         # 提取最后一个用户问题
         last_question = ""
         for msg in reversed(messages):
@@ -275,7 +329,7 @@ class RAGEnhancedService:
                 last_question = msg.get("content", "")
                 break
                 
-        if not last_question:
+        if last_question is None or last_question == "":
             yield {"error": "未找到用户问题"}
             return
         
@@ -290,7 +344,7 @@ class RAGEnhancedService:
             yield f"\n【问题分析】\n{thinking}\n\n【需要查询知识库】\n"
             documents = await self.retrieve_documents(last_question)
             
-            if documents:
+            if documents is not None and len(documents) > 0:
                 yield "【找到相关资料】\n"
                 
                 # 准备引用信息
@@ -308,7 +362,7 @@ class RAGEnhancedService:
             
         # STEP 3: 构建增强提示词
         formatted_docs = ""
-        if documents:
+        if documents is not None and len(documents) > 0:
             formatted_docs = self.format_retrieved_documents(documents)
             
         system_message = "你是一位知识渊博的助手。请基于用户问题回答，如果提供了参考资料，请参考这些资料。"
@@ -319,13 +373,40 @@ class RAGEnhancedService:
                 # 确保服务已初始化（特别是角色服务）
                 await self._ensure_initialized()
                 
-                # 通过角色服务获取角色系统提示词
-                role_info = await self.role_service.get_role_by_id(role_id)
-                if role_info and isinstance(role_info, dict):
-                    # 使用字典语法获取system_prompt，避免KeyError
-                    system_prompt_value = role_info.get("system_prompt")
-                    if system_prompt_value:
-                        system_message = system_prompt_value
+                # 首先尝试从会话角色信息中获取system_prompt
+                if session_id and user_id:
+                    try:
+                        # 尝试获取会话信息
+                        from app.memory.memory_manager import get_memory_manager
+                        memory_manager = await get_memory_manager()
+                        session_key = f"session:{user_id}:{session_id}"
+                        
+                        # 尝试从Redis中获取角色信息
+                        if memory_manager and memory_manager.short_term and memory_manager.short_term.redis:
+                            redis_client = memory_manager.short_term.redis
+                            roles_json = redis_client.hget(session_key, "roles")
+                            
+                            if roles_json:
+                                roles = json.loads(roles_json)
+                                # 查找匹配的角色
+                                for role in roles:
+                                    if role.get("role_id") == role_id and "system_prompt" in role and role["system_prompt"]:
+                                        system_message = role["system_prompt"]
+                                        self.logger.info(f"从会话角色信息中获取到system_prompt: {system_message[:50]}...")
+                                        break
+                    except Exception as session_e:
+                        self.logger.warning(f"从会话中获取system_prompt失败，将尝试从角色服务获取: {str(session_e)}")
+                
+                # 如果从会话中没有获取到，则从角色服务获取
+                if system_message == "你是一位知识渊博的助手。请基于用户问题回答，如果提供了参考资料，请参考这些资料。":
+                    # 通过角色服务获取角色系统提示词
+                    role_info = await self.role_service.get_role_by_id(role_id)
+                    if role_info is not None and isinstance(role_info, dict):
+                        # 使用字典语法获取system_prompt，避免KeyError
+                        system_prompt_value = role_info.get("system_prompt")
+                        if system_prompt_value is not None:
+                            system_message = system_prompt_value
+                            self.logger.info(f"从角色服务获取到system_prompt: {system_message[:50]}...")
             except Exception as e:
                 self.logger.error(f"获取角色系统提示词失败: {str(e)}")
         
@@ -348,7 +429,7 @@ class RAGEnhancedService:
             enhanced_messages.insert(0, {"role": "system", "content": system_message})
             
         # 如果有检索到的文档，添加到最后一个用户消息中
-        if documents:
+        if documents is not None and len(documents) > 0:
             # 找到最后一个用户消息并增强
             for i in range(len(enhanced_messages) - 1, -1, -1):
                 if enhanced_messages[i].get("role") == "user":
@@ -376,7 +457,7 @@ class RAGEnhancedService:
                     break
                 
                 content = chunk.get("choices", [{}])[0].get("delta", {}).get("content", "")
-                if content:
+                if content is not None and content != "":
                     full_response += content
                     yield content
         else:
@@ -392,8 +473,79 @@ class RAGEnhancedService:
             yield content
         
         # 如果需要返回引用信息
-        if references:
+        if references is not None and len(references) > 0:
             yield {"references": references, "message_id": current_message_id}
+            
+        # 保存回复到短期记忆
+        if session_id and user_id and full_response:
+            try:
+                await self.save_to_memory(
+                    session_id=session_id,
+                    user_id=user_id,
+                    last_question=last_question,
+                    ai_response=full_response,
+                    role_id=role_id
+                )
+            except Exception as e:
+                self.logger.error(f"保存回复到短期记忆失败: {str(e)}")
+    
+    async def save_to_memory(self, session_id: str, user_id: str, last_question: str, 
+                           ai_response: str, role_id: Optional[str] = None) -> None:
+        """
+        保存对话到短期记忆
+        
+        Args:
+            session_id: 会话ID
+            user_id: 用户ID
+            last_question: 用户最后一个问题
+            ai_response: AI回复内容
+            role_id: 角色ID
+        """
+        await self._ensure_initialized()
+        
+        try:
+            # 保存用户问题（如果尚未保存）
+            # 先检查最近的一条消息，避免重复保存
+            latest_messages = await self.message_service.get_session_messages(
+                session_id=session_id,
+                limit=1,
+                sort_order="desc"  # 最新的消息在前
+            )
+            
+            save_user_message = True
+            if latest_messages and latest_messages.items:
+                latest_msg = latest_messages.items[0]
+                if latest_msg.message_type == "USER" and latest_msg.content == last_question:
+                    # 最近已保存过相同的用户消息，无需再次保存
+                    save_user_message = False
+                    self.logger.info(f"用户消息已存在，无需再次保存: {last_question[:30]}...")
+            
+            if save_user_message and last_question:
+                await self.message_service.create_message(
+                    session_id=session_id,
+                    content=last_question,
+                    message_type="USER",
+                    user_id=user_id
+                )
+                self.logger.info(f"已保存用户问题到会话 {session_id}: {last_question[:30]}...")
+            
+            # 保存AI回复
+            await self.message_service.create_message(
+                session_id=session_id,
+                content=ai_response,
+                message_type="ASSISTANT",
+                user_id=user_id,
+                role_id=role_id
+            )
+            self.logger.info(f"已保存AI回复到会话 {session_id}: {ai_response[:30]}...")
+            
+            # 更新会话最后活动时间
+            if hasattr(self.session_service, 'update_session_last_activity'):
+                await self.session_service.update_session_last_activity(session_id)
+                
+        except Exception as e:
+            self.logger.error(f"保存到短期记忆失败: {str(e)}")
+            raise
     
     async def stop_message_generation(self, message_id: str) -> bool:
         """

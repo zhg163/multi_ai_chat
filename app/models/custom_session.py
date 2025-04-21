@@ -168,7 +168,8 @@ class CustomSession:
                         "metadata": {
                             "session_id": session_id,
                             "user_id": user_id,
-                            "roles": [role.get("role_name", "") for role in roles]
+                            "roles": [role.get("role_name", "") for role in roles],
+                            "role_prompts": {role.get("role_id", ""): role.get("system_prompt", "") for role in roles if "system_prompt" in role}
                         }
                     }
                     redis_client.rpush(message_key, json.dumps(system_message))

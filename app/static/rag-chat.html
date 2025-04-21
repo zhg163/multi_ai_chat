@@ -291,37 +291,76 @@
         let currentSessionId = null; // 存储当前会话ID
         let isLoadingHistory = false; // 标记是否正在加载历史消息
         let currentUserName = '用户'; // 默认用户名
+        let currentUserId = null; // 存储用户ID
+
+        // 初始化参数
+        function initializeParams() {
+            const urlParams = new URLSearchParams(window.location.search);
+            console.log('URL查询参数:', window.location.search);
+            
+            // 获取并保存会话ID
+            currentSessionId = urlParams.get('session_id');
+            
+            // 获取并保存用户ID和用户名
+            const userId = urlParams.get('userId');
+            if (userId) {
+                currentUserId = userId;
+                console.log('已设置用户ID:', currentUserId);
+            } else {
+                currentUserId = 'anonymous_user';
+                console.log('未找到用户ID参数，使用默认值:', currentUserId);
+            }
+            
+            const userName = urlParams.get('userName');
+            if (userName) {
+                currentUserName = decodeURIComponent(userName);
+                console.log('已设置用户名:', currentUserName);
+            } else {
+                currentUserName = '用户';
+                console.log('未找到用户名参数，使用默认值:', currentUserName);
+            }
+            
+            console.log('初始化参数完成:', {
+                session_id: currentSessionId,
+                userId: currentUserId,
+                userName: currentUserName
+            });
+            
+            return {
+                sessionId: currentSessionId,
+                userId: currentUserId,
+                userName: currentUserName
+            };
+        }
 
         // 初始化
         document.addEventListener('DOMContentLoaded', function() {
-            // 获取URL参数
-            const urlParams = new URLSearchParams(window.location.search);
-            currentSessionId = urlParams.get('session_id');
-            const userId = urlParams.get('user_id');
-            const userName = urlParams.get('user_name');
-
-            // 设置当前用户名
-            if (userName) {
-                currentUserName = decodeURIComponent(userName);
-            }
-
+            // 添加全局错误处理
+            window.addEventListener('error', function(event) {
+                console.error('全局错误:', event.error);
+                alert(`发生错误: ${event.error?.message || '未知错误'}`);
+            });
+            
+            // 初始化参数
+            const params = initializeParams();
+            
             // 更新页面标题，显示完整会话ID和用户名
-            if (currentSessionId) {
+            if (params.sessionId) {
                 let title = ``;
 
                 // 显示完整会话ID
-                title += `(会话: ${currentSessionId}) `;
+                title += `(会话: ${params.sessionId}) `;
 
                 // 如果有用户名，显示用户名
-                if (userName) {
-                    title += `用户: ${currentUserName}`;
+                if (params.userName) {
+                    title += `用户: ${params.userName}`;
                 }
 
                 document.getElementById('session-title').innerText = title;
-                console.log(`已加载会话: ${currentSessionId}, 用户: ${currentUserName}`);
+                console.log(`已加载会话: ${params.sessionId}, 用户: ${params.userName}`);
 
                 // 尝试加载历史消息
-                loadSessionMessages(userId);
+                loadSessionMessages(params.userId);
             } else {
                 console.warn('未提供会话ID，将使用临时会话');
 
@@ -350,6 +389,11 @@
             if (!currentSessionId || isLoadingHistory) return;
 
             isLoadingHistory = true;
+            console.log('开始加载历史消息, 会话ID:', currentSessionId);
+            
+            // 确保有用户ID - 优先使用传入的参数，然后是全局变量，最后是默认值
+            const effectiveUserId = userId || currentUserId || 'anonymous_user';
+            console.log('加载历史消息使用用户ID:', effectiveUserId);
 
             try {
                 // 显示加载中
@@ -359,6 +403,7 @@
                 messagesContainer.appendChild(loadingElement);
 
                 // 调用API获取会话详情
+                console.log(`请求会话详情: /api/memory/session/${currentSessionId}`);
                 const sessionResponse = await fetch(`/api/memory/session/${currentSessionId}`);
 
                 if (!sessionResponse.ok) {
@@ -374,8 +419,8 @@
                 // 获取会话消息
                 let messagesResponse;
                 // 如果提供了用户ID，使用它构建请求
-                if (userId) {
-                    messagesResponse = await fetch(`/api/memory/messages/${userId}/${currentSessionId}`);
+                if (effectiveUserId) {
+                    messagesResponse = await fetch(`/api/memory/messages/${effectiveUserId}/${currentSessionId}`);
                 } else {
                     messagesResponse = await fetch(`/api/memory/session/${currentSessionId}/messages`);
                 }
@@ -383,8 +428,8 @@
                 if (!messagesResponse.ok) {
                     // 尝试使用备用API
                     let fallbackResponse;
-                    if (userId) {
-                        fallbackResponse = await fetch(`/api/messages/${userId}/${currentSessionId}`);
+                    if (effectiveUserId) {
+                        fallbackResponse = await fetch(`/api/messages/${effectiveUserId}/${currentSessionId}`);
                     } else {
                         fallbackResponse = await fetch(`/api/messages/session/${currentSessionId}`);
                     }
@@ -537,7 +582,7 @@
             try {
                 // 获取URL参数中的用户ID
                 const urlParams = new URLSearchParams(window.location.search);
-                const userId = urlParams.get('user_id');
+                const userId = urlParams.get('userId');
 
                 // 生成消息ID
                 currentMessageId = Date.now().toString(36) + Math.random().toString(36).substring(2, 9);
@@ -547,7 +592,11 @@
                     messages: currentMessages,
                     stream: true,
                     temperature: 0.7,
-                    message_id: currentMessageId
+                    message_id: currentMessageId,
+                    // 添加必需参数
+                    provider: "deepseek",
+                    model_name: "deepseek-chat",
+                    api_key: "sk-no-key-required-for-internal-api"
                 };
 
                 // 如果有会话ID，添加到请求参数中
@@ -555,12 +604,22 @@
                     requestData.session_id = currentSessionId;
                 }
 
-                // 如果有用户ID，添加到请求参数中
-                if (userId) {
+                // 如果有用户ID，添加到请求参数中 - 使用全局变量
+                if (currentUserId) {
+                    requestData.user_id = currentUserId;
+                    console.log('使用已保存的用户ID:', currentUserId);
+                } else if (userId) {
+                    // 备用：如果全局变量为空，尝试从URL获取
                     requestData.user_id = userId;
+                    console.log('从URL获取用户ID:', userId);
+                } else {
+                    // 默认值
+                    requestData.user_id = 'anonymous_user';
+                    console.log('使用默认用户ID: anonymous_user');
                 }
-
-                // 调用RAG增强聊天API
+                
+                // 调用聊天API（从RAG API改为标准聊天API）
+                console.log('发送聊天请求:', JSON.stringify(requestData, null, 2));
                 const response = await fetch('/api/llm/chatrag', {
                     method: 'POST',
                     headers: {
@@ -570,7 +629,25 @@
                 });
 
                 if (!response.ok) {
-                    throw new Error(`API错误: ${response.status}`);
+                    // 尝试获取错误详情
+                    let errorDetail = '';
+                    try {
+                        const errorJson = await response.json();
+                        if (typeof errorJson === 'object') {
+                            // 将对象转换为格式化的字符串
+                            errorDetail = JSON.stringify(errorJson, null, 2);
+                        } else {
+                            errorDetail = errorJson.error || errorJson.detail || JSON.stringify(errorJson);
+                        }
+                    } catch (e) {
+                        // 如果无法解析JSON，则使用响应文本
+                        errorDetail = await response.text();
+                    }
+                    
+                    console.error('API返回错误:', errorDetail);
+                    
+                    // 抛出更详细的错误
+                    throw new Error(`API错误: ${response.status}${errorDetail ? ' - ' + errorDetail : ''}`);
                 }
 
                 // 启用停止按钮
@@ -592,11 +669,17 @@
                     const lines = chunk.split('\n');
 
                     for (const line of lines) {
+                        // 忽略空行或只包含HTTP头信息的行
+                        if (!line.trim() || line.trim().startsWith(':') || line.includes('keep-alive')) {
+                            console.log('忽略HTTP头或空行:', line);
+                            continue;
+                        }
+                        
                         if (line.startsWith('data: ') && line.length > 6) {
-                            const data = line.substring(5);
+                            const data = line.substring(6).trim(); // 修改这里，确保正确处理数据前缀
 
                             // 检查是否为结束标记
-                            if (data.trim() === '[DONE]') {
+                            if (data === '[DONE]') {
                                 isWaitingForResponse = false;
                                 sendButton.disabled = false;
                                 stopButton.disabled = true;
@@ -604,9 +687,29 @@
                             }
 
                             try {
-                                const parsedData = JSON.parse(data);
+                                // 首先尝试解析为JSON
+                                let parsedData;
+                                try {
+                                    // 防止空数据或无效JSON
+                                    if (!data || data.trim() === '') {
+                                        console.log('跳过空数据');
+                                        continue;
+                                    }
+                                    
+                                    parsedData = JSON.parse(data);
+                                    console.log('成功解析JSON数据');
+                                } catch (e) {
+                                    // 记录JSON解析错误的详细信息
+                                    console.warn(`解析JSON失败 [${e.message}]，数据: "${data}"`);
+                                    
+                                    // 如果不是JSON，就直接将文本作为内容处理
+                                    console.log('作为纯文本处理:', data);
+                                    responseText += data;
+                                    updateAssistantMessage(assistantMessageElement, responseText);
+                                    continue;
+                                }
 
-                                // 处理不同类型的响应
+                                // 处理JSON格式响应
                                 if (parsedData.choices && parsedData.choices.length > 0) {
                                     // 流式内容更新
                                     const content = parsedData.choices[0].delta?.content || '';
@@ -629,6 +732,9 @@
                             } catch (e) {
                                 console.warn('解析响应数据失败:', e, data);
                             }
+                        } else if (line.trim() && line.trim() !== 'data:') {
+                            // 处理非标准格式的数据行
+                            console.log('收到非标准数据行:', line);
                         }
                     }
                 }
@@ -656,7 +762,19 @@
 
             } catch (error) {
                 console.error('发送消息失败:', error);
-                assistantMessageElement.textContent = `发送消息失败: ${error.message}`;
+                // 在UI中显示详细错误信息
+                const contentElement = assistantMessageElement.querySelector('.message-content');
+                contentElement.innerHTML = `
+                    <div style="color: red; padding: 10px; background-color: #ffeeee; border-radius: 5px;">
+                        <strong>发送消息失败:</strong> ${error.message}
+                        <br><br>
+                        <details>
+                            <summary>查看详细错误信息</summary>
+                            <pre style="background: #f5f5f5; padding: 8px; overflow: auto;">${error.stack || '没有更多信息'}</pre>
+                        </details>
+                        <div style="margin-top: 8px;">请刷新页面或返回会话列表重试。</div>
+                    </div>
+                `;
 
                 // 重置状态
                 isWaitingForResponse = false;
@@ -672,10 +790,14 @@
             try {
                 // 获取URL参数中的用户ID
                 const urlParams = new URLSearchParams(window.location.search);
-                const userId = urlParams.get('user_id');
+                const userId = urlParams.get('userId');
 
                 const requestData = {
-                    message_id: currentMessageId
+                    message_id: currentMessageId,
+                    // 添加必需参数
+                    provider: "deepseek",
+                    model_name: "deepseek-chat",
+                    api_key: "sk-no-key-required-for-internal-api"
                 };
 
                 // 如果有会话ID，添加到请求参数中
@@ -683,12 +805,19 @@
                     requestData.session_id = currentSessionId;
                 }
 
-                // 如果有用户ID，添加到请求参数中
-                if (userId) {
+                // 使用全局保存的用户ID
+                if (currentUserId) {
+                    requestData.user_id = currentUserId;
+                    console.log('停止生成请求使用已保存的用户ID:', currentUserId);
+                } else if (userId) {
                     requestData.user_id = userId;
+                    console.log('停止生成请求从URL获取用户ID:', userId);
+                } else {
+                    requestData.user_id = 'anonymous_user';
+                    console.log('停止生成请求使用默认用户ID: anonymous_user');
                 }
 
-                const response = await fetch('/api/llm/chatrag/stop', {
+                const response = await fetch('/api/llm/chat/stop', {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json'
@@ -709,6 +838,8 @@
 
         // 添加消息到UI
         function addMessageToUI(role, content) {
+            console.log(`添加${role}消息到UI:`, content.substring(0, 30) + (content.length > 30 ? '...' : ''));
+            
             const messageElement = document.createElement('div');
             messageElement.className = `message ${role}`;
 
@@ -749,6 +880,12 @@
         // 更新助手消息内容
         function updateAssistantMessage(element, content) {
             const contentElement = element.querySelector('.message-content');
+            if (!contentElement) {
+                console.error('找不到消息内容元素:', element);
+                return;
+            }
+            
+            console.log('更新消息内容:', content.substring(0, 50) + (content.length > 50 ? '...' : ''));
             contentElement.innerHTML = formatAssistantContent(content);
 
             // 滚动到底部

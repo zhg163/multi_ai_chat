@@ -25,6 +25,7 @@ router = APIRouter(
 class RoleInfo(BaseModel):
     role_id: str = Field(..., description="角色ID")
     role_name: str = Field(..., description="角色名称")
+    system_prompt: Optional[str] = Field(None, description="角色系统提示词")
 
 class SessionCreateRequest(BaseModel):
     class_id: str = Field(..., description="聊天室ID")
@@ -70,7 +71,7 @@ async def get_all_sessions(
                 continue
                 
             missing_fields = []
-            for field in ['session_id', 'class_name', 'user_name', 'session_status', 'created_at', 'updated_at']:
+            for field in ['session_id', 'class_name', 'user_id','user_name', 'session_status', 'created_at', 'updated_at']:
                 if field not in session:
                     missing_fields.append(field)
                 elif field in ['created_at', 'updated_at'] and session[field] is None:
@@ -94,14 +95,15 @@ async def get_all_sessions(
         for session in sessions:
             try:
                 # 验证会话字段
-                if not all(key in session for key in ['session_id', 'class_name', 'user_name', 'session_status']):
+                if not all(key in session for key in ['session_id', 'class_name', 'user_id','user_name', 'session_status']):
                     missing = [key for key in ['session_id', 'class_name', 'user_name', 'session_status'] if key not in session]
                     logger.error(f"会话缺少必要字段: {missing}, 会话ID: {session.get('session_id', 'unknown')}")
                     continue
                 
                 session_data = {
                     "session_id": session["session_id"],
-                    "class_name": session["class_name"],
+                    "class_name": session["class_name"],    
+                    "user_id": session["user_id"],
                     "user_name": session["user_name"],
                     "status": session["session_status"],
                 }
@@ -166,12 +168,27 @@ async def create_custom_session(
         # 记录请求
         logger.info(f"创建自定义会话请求: {request}")
         
-        # 转换角色格式
-        roles = [{"role_id": role.role_id, "role_name": role.role_name} for role in request.roles]
+        # 引入角色服务
+        from app.services.role_service import RoleService
+        role_service = RoleService()
         
-        # 验证请求用户和会话用户是否匹配
-        # if current_user and current_user.get("id") != request.user_id:
-        #     logger.warning(f"请求用户({current_user.get('id')})与会话用户({request.user_id})不匹配")
+        # 转换角色格式并添加system_prompt
+        roles = []
+        for role in request.roles:
+            role_info = {"role_id": role.role_id, "role_name": role.role_name}
+            
+            # 客户端未提供system_prompt时，从服务器获取
+            if role.system_prompt is None:
+                try:
+                    role_data = await role_service.get_role_by_id(role.role_id)
+                    if role_data and 'system_prompt' in role_data:
+                        role_info['system_prompt'] = role_data['system_prompt']
+                except Exception as e:
+                    logger.warning(f"获取角色{role.role_id}的system_prompt失败: {str(e)}")
+            else:
+                role_info['system_prompt'] = role.system_prompt
+                
+            roles.append(role_info)
         
         # 创建会话
         session = await CustomSessionService.create_custom_session(

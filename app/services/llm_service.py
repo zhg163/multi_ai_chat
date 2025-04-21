@@ -665,6 +665,185 @@ class LLMService:
                 model=model_str,
                 provider=provider_str
             )
+            
+    async def generate(self, **kwargs):
+        """
+        generate方法，作为generate_response方法的别名
+        
+        为了提供对llm_routes.py的向后兼容性
+        支持model, temperature, max_tokens等参数
+        """
+        logger.info("使用generate别名方法，调用generate_response")
+        
+        # 提取消息列表
+        messages = kwargs.get("messages", [])
+        
+        # 创建配置对象
+        config = None
+        if "model" in kwargs or "temperature" in kwargs or "max_tokens" in kwargs:
+            # 获取提供商枚举
+            provider = None
+            if "provider" in kwargs and kwargs["provider"]:
+                try:
+                    provider = LLMProvider(kwargs["provider"])
+                except ValueError:
+                    provider = self.default_config.provider
+            else:
+                provider = self.default_config.provider
+                
+            # 确保max_tokens为整数或使用默认值
+            max_tokens_value = kwargs.get("max_tokens")
+            if max_tokens_value is None:
+                max_tokens_value = self.default_config.max_tokens
+            else:
+                max_tokens_value = int(max_tokens_value)
+                
+            # 创建配置对象
+            config = LLMConfig(
+                provider=provider,
+                model_name=kwargs.get("model", self.default_config.model_name),
+                api_key=get_api_key(provider) or "",
+                temperature=kwargs.get("temperature", self.default_config.temperature),
+                max_tokens=max_tokens_value
+            )
+        
+        # 调用generate_response
+        response = await self.generate_response(messages, config)
+        
+        # 转换LLMResponse对象为字典，保持与chat_completion一致
+        return {
+            "choices": [
+                {
+                    "message": {"content": response.content},
+                    "finish_reason": response.finish_reason
+                }
+            ],
+            "usage": {"total_tokens": response.tokens_used},
+            "model": response.model,
+            "provider": response.provider.value if response.provider else None
+        }
+    
+    # 添加别名方法，以兼容RAGEnhancedService的调用
+    async def chat_completion(self, **kwargs):
+        """
+        chat_completion方法，作为generate_response方法的别名
+        
+        为了提供对RAGEnhancedService的向后兼容性
+        支持model, temperature, max_tokens等参数
+        """
+        logger.info("使用chat_completion别名方法，调用generate_response")
+        
+        # 提取消息列表
+        messages = kwargs.get("messages", [])
+        
+        # 创建配置对象
+        config = None
+        if "model" in kwargs or "temperature" in kwargs or "max_tokens" in kwargs:
+            # 获取提供商枚举
+            provider = None
+            if "provider" in kwargs and kwargs["provider"]:
+                try:
+                    provider = LLMProvider(kwargs["provider"])
+                except ValueError:
+                    provider = self.default_config.provider
+            else:
+                provider = self.default_config.provider
+                
+            # 确保max_tokens为整数或使用默认值
+            max_tokens_value = kwargs.get("max_tokens")
+            if max_tokens_value is None:
+                max_tokens_value = self.default_config.max_tokens
+            else:
+                max_tokens_value = int(max_tokens_value)
+                
+            # 创建配置对象
+            config = LLMConfig(
+                provider=provider,
+                model_name=kwargs.get("model", self.default_config.model_name),
+                api_key=get_api_key(provider) or "",
+                temperature=kwargs.get("temperature", self.default_config.temperature),
+                max_tokens=max_tokens_value
+            )
+        
+        # 调用底层方法
+        response = await self.generate_response(messages, config)
+        
+        # 将LLMResponse对象转换为字典，以便RAGEnhancedService可以使用get()方法
+        return {
+            "choices": [
+                {
+                    "message": {"content": response.content},
+                    "finish_reason": response.finish_reason
+                }
+            ],
+            "usage": {"total_tokens": response.tokens_used},
+            "model": response.model,
+            "provider": response.provider.value if response.provider else None
+        }
+    
+    async def chat_completion_stream(self, **kwargs):
+        """
+        chat_completion_stream方法，作为generate_stream方法的别名
+        
+        为了提供对RAGEnhancedService的向后兼容性
+        支持model, temperature, max_tokens等参数
+        """
+        logger.info("使用chat_completion_stream别名方法，调用generate_stream")
+        
+        # 提取消息列表
+        messages = kwargs.get("messages", [])
+        
+        # 创建配置对象
+        config = None
+        if "model" in kwargs or "temperature" in kwargs or "max_tokens" in kwargs:
+            # 获取提供商枚举
+            provider = None
+            if "provider" in kwargs and kwargs["provider"]:
+                try:
+                    provider = LLMProvider(kwargs["provider"])
+                except ValueError:
+                    provider = self.default_config.provider
+            else:
+                provider = self.default_config.provider
+                
+            # 确保max_tokens为整数或使用默认值
+            max_tokens_value = kwargs.get("max_tokens")
+            if max_tokens_value is None:
+                max_tokens_value = self.default_config.max_tokens
+            else:
+                max_tokens_value = int(max_tokens_value)
+                
+            # 创建配置对象
+            config = LLMConfig(
+                provider=provider,
+                model_name=kwargs.get("model", self.default_config.model_name),
+                api_key=get_api_key(provider) or "",
+                temperature=kwargs.get("temperature", self.default_config.temperature),
+                max_tokens=max_tokens_value
+            )
+            
+        async for chunk in self.generate_stream(messages, config):
+            # 将StreamResponse对象转换为与OpenAI API兼容的字典格式
+            if chunk.is_start:
+                # 开始消息，转换成字典格式
+                yield {
+                    "choices": [{"delta": {"role": "assistant"}}],
+                    "model": chunk.model or "unknown-model"
+                }
+            elif chunk.is_end:
+                # 结束消息，转换成特殊字典格式
+                # 注意：不要返回字符串，而是返回一个标记结束的字典
+                yield {
+                    "choices": [{"finish_reason": "stop"}],
+                    "model": chunk.model or "unknown-model",
+                    "is_done": True  # 添加标记以帮助识别结束
+                }
+            elif chunk.content is not None:
+                # 内容块，转换成标准格式的字典
+                yield {
+                    "choices": [{"delta": {"content": chunk.content}}],
+                    "model": chunk.model or "unknown-model"
+                }
 
 def get_api_key(provider):
     """

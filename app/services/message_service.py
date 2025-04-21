@@ -22,11 +22,11 @@ class MessageService:
         if self._initialized:
             return
             
-        if not self.db:
+        if self.db is None:
             from ..database.connection import get_database
             self.db = await get_database()
             
-        if self.db:
+        if self.db is not None:
             self.collection = self.db.messages
             self._initialized = True
         else:

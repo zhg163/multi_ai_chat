@@ -1,5 +1,5 @@
 """
-记忆管理器 - 管理短期和长期记忆
+记忆管理器 - 管理短期记忆
 """
 
 import time
@@ -8,20 +8,20 @@ import uuid
 import asyncio
 from typing import List, Dict, Any, Optional
 from app.memory.buffer_memory import ShortTermMemory
-from app.memory.summary_memory import LongTermMemory
-from app.services.summary_service import summary_service
-from app.services.session_service import SessionService
+from app.services.custom_session_service import CustomSessionService
 from app.memory.schemas import SessionResponse, MemoryContext
-from app.models.session import SessionStatus
+from app.models.custom_session import SessionStatus
 from app.config import memory_settings
 import os
 from datetime import datetime
+from redis.asyncio import Redis
+from redis.exceptions import RedisError
 
 logger = logging.getLogger(__name__)
 
 class MemoryManager:
     """
-    记忆管理器，负责协调短期记忆和长期记忆
+    记忆管理器，负责短期记忆
     """
     
     def __init__(self):
@@ -30,7 +30,6 @@ class MemoryManager:
             # 初始化短期记忆
             try:
                 # 创建Redis客户端
-                import redis
                 from app.config import memory_settings
                 
                 # 从环境变量或内存设置中获取配置
@@ -39,100 +38,55 @@ class MemoryManager:
                 redis_password = os.getenv("REDIS_PASSWORD", "!qaz2wsX")
                 max_chat_rounds = int(os.getenv("MAX_CHAT_ROUNDS", "2"))
                 
-                redis_client = redis.Redis(
-                    host=redis_host,
-                    port=redis_port,
-                    password=redis_password,
-                    decode_responses=True
-                )
+                self.redis = None
+                self.redis_url = f"redis://{redis_host}:{redis_port}"
+                if redis_password:
+                    self.redis_url = f"redis://:{redis_password}@{redis_host}:{redis_port}"
                 
-                # 测试Redis连接
-                try:
-                    redis_client.ping()
-                    logger.info(f"成功连接到Redis服务器: {redis_host}:{redis_port}")
-                except redis.ConnectionError as conn_err:
-                    logger.error(f"Redis连接失败: {str(conn_err)}")
-                    raise
+                # 初始化其他组件
+                self.short_term_memory = ShortTermMemory()
+                self.session_service = CustomSessionService()
+                self.max_chat_rounds = max_chat_rounds
                 
-                # 使用创建的Redis客户端初始化ShortTermMemory
-                self.short_term = ShortTermMemory(redis_client=redis_client, max_rounds=max_chat_rounds)
-                logger.info("短期记忆模块初始化成功")
-            except Exception as redis_error:
-                logger.error(f"短期记忆模块初始化失败: {str(redis_error)}")
-                self.short_term = None
+                logger.info("记忆管理器初始化完成")
+                
+            except Exception as e:
+                logger.error(f"初始化短期记忆时出错: {str(e)}")
+                raise
+                
+        except Exception as e:
+            logger.error(f"初始化记忆管理器时出错: {str(e)}")
+            raise
             
-            # 初始化长期记忆对象（但不连接数据库）
-            try:
-                self.long_term = LongTermMemory()  # 注意：此时尚未连接数据库
-                logger.info("长期记忆模块对象创建成功，等待异步初始化")
-            except Exception as mongo_error:
-                logger.error(f"长期记忆模块对象创建失败: {str(mongo_error)}")
-                self.long_term = None
+    async def _ensure_redis_connected(self):
+        """确保Redis连接已建立"""
+        if self.redis is None:
+            self.redis = await Redis.from_url(
+                self.redis_url,
+                encoding="utf-8",
+                decode_responses=True
+            )
             
-            # 检查至少一个记忆模块初始化成功
-            if not self.short_term and not self.long_term:
-                logger.error("所有记忆模块初始化失败，部分功能可能不可用")
+    async def initialize(self):
+        """异步初始化服务"""
+        try:
+            await self._ensure_redis_connected()
+            # 测试Redis连接
+            await self.redis.ping()
+            logger.info(f"成功连接到Redis服务器: {self.redis_url}")
+            
+            # 初始化短期记忆
+            await self.short_term_memory.initialize()
+            logger.info("短期记忆模块初始化成功")
             
             logger.info("记忆管理器初始化完成")
-        except Exception as e:
-            logger.error(f"记忆管理器初始化失败: {str(e)}")
-            # 确保对象至少有属性定义
-            self.short_term = None
-            self.long_term = None
-        
-    async def initialize(self):
-        """
-        异步初始化记忆管理器
-        必须在创建MemoryManager对象后调用
-        """
-        try:
-            # 如果短期记忆模块初始化失败，尝试重新初始化
-            if not self.short_term:
-                try:
-                    # 创建Redis客户端
-                    import redis
-                    from app.config import memory_settings
-                    
-                    # 从环境变量或内存设置中获取配置
-                    redis_host = os.getenv("REDIS_HOST", "localhost")
-                    redis_port = int(os.getenv("REDIS_PORT", "6378"))
-                    redis_password = os.getenv("REDIS_PASSWORD", "!qaz2wsX")
-                    max_chat_rounds = int(os.getenv("MAX_CHAT_ROUNDS", "2"))
-                    
-                    redis_client = redis.Redis(
-                        host=redis_host,
-                        port=redis_port,
-                        password=redis_password,
-                        decode_responses=True
-                    )
-                    
-                    # 测试Redis连接
-                    try:
-                        redis_client.ping()
-                        logger.info(f"异步初始化：成功连接到Redis服务器: {redis_host}:{redis_port}")
-                    except redis.ConnectionError as conn_err:
-                        logger.error(f"异步初始化：Redis连接失败: {str(conn_err)}")
-                        raise
-                    
-                    # 使用创建的Redis客户端初始化ShortTermMemory
-                    self.short_term = ShortTermMemory(redis_client=redis_client, max_rounds=max_chat_rounds)
-                    logger.info("异步初始化：短期记忆模块初始化成功")
-                except Exception as redis_error:
-                    logger.error(f"异步初始化：短期记忆模块初始化失败: {str(redis_error)}")
-                    self.short_term = None
             
-            # 异步初始化长期记忆
-            if self.long_term:
-                try:
-                    await self.long_term.initialize()
-                    logger.info("长期记忆模块异步初始化成功")
-                except Exception as mongo_error:
-                    logger.error(f"长期记忆模块异步初始化失败: {str(mongo_error)}")
-                    # 保留对象，部分功能可能仍然可用
-            return self
+        except RedisError as e:
+            logger.error(f"Redis连接失败: {str(e)}")
+            raise
         except Exception as e:
-            logger.error(f"记忆管理器异步初始化失败: {str(e)}")
-            return self
+            logger.error(f"初始化记忆管理器时出错: {str(e)}")
+            raise
         
     async def start_new_session(self, user_id: str, selected_username: str = None) -> str:
         """
@@ -147,7 +101,7 @@ class MemoryManager:
         """
         try:
             # 检查短期记忆是否可用
-            if not self.short_term:
+            if not self.short_term_memory:
                 logger.error("短期记忆模块不可用，无法创建新会话")
                 # 返回一个临时会话ID，允许应用继续工作
                 return f"temp-{int(time.time())}-{str(uuid.uuid4())[:8]}"
@@ -156,7 +110,7 @@ class MemoryManager:
             session_id = str(int(time.time())) + "-" + str(uuid.uuid4())[:8]
             
             # 创建会话
-            self.short_term.start_session(session_id, user_id, selected_username)
+            self.short_term_memory.start_session(session_id, user_id, selected_username)
             
             logger.info(f"已开始新会话: {session_id}")
             return session_id
@@ -167,60 +121,43 @@ class MemoryManager:
         
     async def end_session(self, session_id: str, user_id: str) -> Dict:
         """
-        结束会话并生成摘要
+        结束会话
         
         Args:
             session_id: 会话ID
             user_id: 用户ID
             
         Returns:
-            结果信息，包含会话ID和摘要
+            结果信息，包含会话ID
         """
         try:
             # 获取会话消息
-            messages = self.short_term.get_session_messages(session_id, user_id)
+            messages = self.short_term_memory.get_session_messages(session_id, user_id)
             
             if not messages:
                 logger.warning(f"会话为空: {session_id}")
                 return SessionResponse(
                     success=False,
-                    error="会话为空，无法生成摘要"
+                    error="会话为空"
                 ).dict()
-                
-            # 生成摘要
-            summary = await summary_service.generate_summary(messages)
-            
-            # 生成嵌入向量
-            embedding = summary_service.generate_embedding(summary)
-            
-            # 存储摘要
-            summary_id = await self.long_term.store_session_summary(
-                session_id=session_id,
-                user_id=user_id,
-                summary=summary,
-                messages_count=len(messages),
-                embedding=embedding
-            )
             
             # 更新会话状态为已归档
             try:
-                await SessionService.change_session_status(
+                await CustomSessionService.update_session_status(
                     session_id=session_id,
-                    user_id=user_id,
-                    new_status=SessionStatus.ARCHIVED
+                    status=2  # 已结束状态
                 )
                 logger.info(f"已将会话 {session_id} 状态更新为已归档")
             except Exception as status_error:
                 logger.error(f"更新会话状态失败: {str(status_error)}")
             
             # 更新会话状态
-            self.short_term.end_session(session_id, user_id)
+            self.short_term_memory.end_session(session_id, user_id)
             
-            logger.info(f"已结束会话: {session_id}, 生成摘要: {summary[:100]}...")
+            logger.info(f"已结束会话: {session_id}")
             return SessionResponse(
                 success=True,
-                session_id=session_id,
-                summary=summary
+                session_id=session_id
             ).dict()
             
         except Exception as e:
@@ -250,7 +187,7 @@ class MemoryManager:
         """
         try:
             # 检查短期记忆模块是否可用
-            if not self.short_term:
+            if not self.short_term_memory:
                 logger.error("短期记忆模块不可用，无法添加消息")
                 return False
                 
@@ -283,7 +220,7 @@ class MemoryManager:
             
             # 添加消息，并获取是否需要归档的消息
             try:
-                result, oldest_message = await self.short_term.add_message(
+                result, oldest_message = await self.short_term_memory.add_message(
                     session_id=session_id, 
                     user_id=user_id, 
                     role=role, 
@@ -296,138 +233,9 @@ class MemoryManager:
                 logger.error(f"选择用户错误: {str(e)}")
                 raise
             
-            # 双写逻辑：同时将当前消息保存到MongoDB
-            if result and self.long_term and self.long_term.db is not None:
-                try:
-                    # 构建当前消息
-                    current_message = {
-                        "role": role,
-                        "content": content,
-                        "role_id": role_id,
-                        "timestamp": datetime.utcnow().isoformat(),
-                        "message_id": message_id
-                    }
-                    
-                    # 尝试保存当前消息到MongoDB
-                    logger.info(f"双写：正在将当前消息保存到MongoDB")
-                    saved = await self.archive_message(session_id, user_id, current_message)
-                    if saved:
-                        logger.info(f"双写：当前消息已成功保存到MongoDB")
-                    else:
-                        logger.warning(f"双写：当前消息保存到MongoDB失败")
-                except Exception as save_error:
-                    logger.error(f"双写：保存当前消息到MongoDB失败: {str(save_error)}")
-                    # 这里我们不影响主流程，即使MongoDB写入失败也继续
-            
-            # 如果有需要归档的消息，执行归档操作
-            if result and oldest_message and self.long_term and self.long_term.db is not None:
-                try:
-                    # 记录传递给归档功能的消息信息
-                    logger.info(f"开始归档旧消息处理")
-                    logger.info(f"旧消息信息: role={oldest_message.get('role', '未知')}, role_id={oldest_message.get('role_id', '无')}")
-                    
-                    # 尝试最多3次归档
-                    max_retries = 3
-                    for attempt in range(max_retries):
-                        try:
-                            archived = await self.archive_message(session_id, user_id, oldest_message)
-                            if archived:
-                                logger.info(f"旧消息归档成功: 会话{session_id}")
-                                break
-                            else:
-                                if attempt < max_retries - 1:
-                                    logger.warning(f"归档尝试 {attempt + 1}/{max_retries} 失败，准备重试")
-                                    await asyncio.sleep(1)  # 等待1秒后重试
-                                else:
-                                    logger.error(f"旧消息归档失败，已达到最大重试次数: 会话{session_id}")
-                        except Exception as retry_error:
-                            if attempt < max_retries - 1:
-                                logger.warning(f"归档尝试 {attempt + 1}/{max_retries} 出错: {str(retry_error)}，准备重试")
-                                await asyncio.sleep(1)
-                            else:
-                                raise
-                except Exception as archive_error:
-                    logger.error(f"归档旧消息最终失败: {str(archive_error)}")
-                    # 记录失败的消息以便后续处理
-                    await self._record_failed_archive(session_id, user_id, oldest_message)
-            
             return result
         except Exception as e:
             logger.error(f"添加消息失败: {str(e)}")
-            return False
-            
-    async def archive_message(self, session_id: str, user_id: str, message: dict) -> bool:
-        """
-        将单条消息归档到MongoDB
-        
-        Args:
-            session_id: 会话ID
-            user_id: 用户ID
-            message: 消息数据
-            
-        Returns:
-            是否成功归档
-        """
-        try:
-            # 检查长期记忆是否可用
-            if not self.long_term or self.long_term.db is None:
-                logger.warning("长期记忆模块不可用，无法归档消息")
-                return False
-                
-            from app.database.connection import get_database
-            db = await get_database()
-            
-            if db is not None:
-                # 构建消息文档
-                message_doc = {
-                    "session_id": session_id,
-                    "user_id": user_id,
-                    "role": message.get("role", "unknown"),
-                    "content": message.get("content", ""),
-                    "timestamp": message.get("timestamp", time.time()),
-                    "archived_at": time.time(),
-                    "archived_from": "redis_buffer_memory"
-                }
-                
-                # 添加role_id字段，如果原消息中存在
-                if "role_id" in message and message["role_id"] is not None:
-                    message_doc["role_id"] = message["role_id"]
-                    logger.info(f"消息归档: 包含role_id = {message['role_id']}")
-                # 向后兼容旧的roleid字段名
-                elif "roleid" in message and message["roleid"] is not None:
-                    message_doc["role_id"] = message["roleid"]
-                    logger.info(f"消息归档: 从roleid = {message['roleid']} 转换为 role_id")
-                
-                # 插入MongoDB
-                try:
-                    if hasattr(db, 'messages'):
-                        result = await db.messages.insert_one(message_doc)
-                        if result and result.inserted_id:
-                            logger.info(f"消息已归档到MongoDB, ID: {result.inserted_id}")
-                            return True
-                        else:
-                            logger.warning("消息归档到MongoDB失败，未返回插入ID")
-                            return False
-                    else:
-                        # 尝试使用self.long_term.db作为备用
-                        if hasattr(self.long_term.db, 'messages'):
-                            result = await self.long_term.db.messages.insert_one(message_doc)
-                            if result and result.inserted_id:
-                                logger.info(f"使用备用连接归档消息到MongoDB, ID: {result.inserted_id}")
-                                return True
-                        
-                        logger.error("数据库连接中没有messages集合")
-                        return False
-                except Exception as insert_error:
-                    logger.error(f"插入MongoDB失败: {str(insert_error)}")
-                    return False
-                
-            else:
-                logger.error("无法获取数据库连接")
-                return False
-                
-        except Exception as e:
-            logger.error(f"归档消息到MongoDB失败: {str(e)}")
             return False
             
     async def build_context(self, session_id: str, user_id: str, current_message: str = None) -> Dict:
@@ -440,44 +248,12 @@ class MemoryManager:
             current_message: 当前消息（可选）
             
         Returns:
-            上下文信息，包含消息和相关摘要
+            上下文信息，包含消息
         """
         try:
             # 获取当前会话消息
-            current_messages = self.short_term.get_session_messages(session_id, user_id)
+            current_messages = await self.short_term_memory.get_session_messages(session_id, user_id)
             
-            # 检查是否需要生成摘要
-            token_count = self.short_term.count_tokens(session_id, user_id)
-            if summary_service.should_generate_summary(current_messages, token_count):
-                # 生成中间摘要
-                summary = await summary_service.generate_summary(current_messages)
-                embedding = summary_service.generate_embedding(summary)
-                
-                # 存储摘要
-                await self.long_term.store_session_summary(
-                    session_id=session_id,
-                    user_id=user_id,
-                    summary=summary,
-                    messages_count=len(current_messages),
-                    embedding=embedding
-                )
-                
-                logger.info(f"已生成中间摘要: {summary[:100]}...")
-            
-            # 生成当前消息的嵌入向量（如果提供）
-            query_embedding = None
-            if current_message:
-                query_embedding = summary_service.generate_embedding(current_message)
-            elif current_messages:
-                # 使用最后一条消息作为查询
-                query_embedding = summary_service.generate_embedding(current_messages[-1]["content"])
-                
-            # 检索相关历史摘要
-            relevant_summaries = []
-            if query_embedding:
-                summaries = await self.long_term.search_relevant_summaries(user_id, query_embedding)
-                relevant_summaries = [summary["summary"] for summary in summaries]
-                
             # 构建上下文
             context = []
             
@@ -491,7 +267,7 @@ class MemoryManager:
             # 创建上下文对象
             memory_context = MemoryContext(
                 messages=context,
-                related_summaries=relevant_summaries
+                related_summaries=[]  # 不提供相关摘要
             )
             
             return memory_context.dict()
@@ -517,13 +293,10 @@ class MemoryManager:
         """
         try:
             # 获取活跃会话
-            active_sessions = self.short_term.list_active_sessions(user_id)
+            active_sessions = await self.short_term_memory.list_active_sessions(user_id)
             
-            # 获取已完成会话
-            completed_sessions = await self.long_term.get_user_summaries(user_id, limit, skip)
-            
-            # 合并会话列表
-            return active_sessions + completed_sessions
+            # 返回活跃会话
+            return active_sessions
             
         except Exception as e:
             logger.error(f"获取用户会话列表失败: {str(e)}")
@@ -531,7 +304,7 @@ class MemoryManager:
             
     async def get_session_detail(self, session_id: str, user_id: str) -> Dict:
         """
-        获取会话详情
+        获取短期记忆聊天详情
         
         Args:
             session_id: 会话ID
@@ -542,11 +315,11 @@ class MemoryManager:
         """
         try:
             # 检查会话是否活跃
-            session_info = self.short_term.get_session_info(session_id, user_id)
+            session_info = await self.short_term_memory.get_session_info(session_id, user_id)
             
             if session_info:
                 # 获取消息
-                messages = self.short_term.get_session_messages(session_id, user_id)
+                messages = await self.short_term_memory.get_session_messages(session_id, user_id)
                 
                 return {
                     "session_id": session_id,
@@ -555,27 +328,14 @@ class MemoryManager:
                     "start_time": session_info.get("start_time"),
                     "end_time": session_info.get("end_time"),
                     "messages": messages,
-                    "summary": None  # 活跃会话没有摘要
+                    "summary": None
                 }
-            else:
-                # 尝试从长期记忆获取
-                summary = await self.long_term.get_session_summary(session_id)
                 
-                if summary:
-                    return {
-                        "session_id": session_id,
-                        "user_id": user_id,
-                        "status": "completed",
-                        "summary": summary.get("summary"),
-                        "created_at": summary.get("created_at"),
-                        "messages_count": summary.get("messages_count")
-                    }
-                    
             # 会话不存在
             return None
             
         except Exception as e:
-            logger.error(f"获取会话详情失败: {str(e)}")
+            logger.error(f"获取短期记忆聊天详情失败: {str(e)}")
             return None
             
     def truncate_by_token(self, text: str, max_token: int = 12000) -> str:
@@ -614,7 +374,7 @@ class MemoryManager:
                 return await self.start_new_session(user_id)
                 
             # 检查会话是否存在
-            session_info = self.short_term.get_session_info(session_id, user_id)
+            session_info = await self.short_term_memory.get_session_info(session_id, user_id)
             if not session_info:
                 # 会话不存在，创建新会话
                 return await self.start_new_session(user_id)
@@ -646,7 +406,7 @@ class MemoryManager:
         """
         try:
             # 检查短期记忆模块是否可用
-            if not self.short_term:
+            if not self.short_term_memory:
                 logger.error("短期记忆模块不可用，无法安全添加消息")
                 return False
                 
@@ -654,7 +414,7 @@ class MemoryManager:
             actual_session_id = await self.ensure_session_exists(user_id, session_id)
             
             # 使用重试机制添加消息
-            result, oldest_message = await self.short_term.add_message_with_retry(
+            result, oldest_message = await self.short_term_memory.add_message_with_retry(
                 actual_session_id, 
                 user_id, 
                 role, 
@@ -663,14 +423,6 @@ class MemoryManager:
                 message_id,
                 max_retries=3
             )
-            
-            # 如果有需要归档的消息，执行归档操作
-            if result and oldest_message and self.long_term and self.long_term.db is not None:
-                try:
-                    await self.archive_message(actual_session_id, user_id, oldest_message)
-                except Exception as archive_error:
-                    logger.error(f"安全添加消息中归档步骤出错: {str(archive_error)}")
-                    # 继续执行，不影响主流程
             
             return result
         except Exception as e:
@@ -690,12 +442,12 @@ class MemoryManager:
         """
         try:
             # 检查短期记忆模块是否可用
-            if not self.short_term:
+            if not self.short_term_memory:
                 logger.error("短期记忆模块不可用，无法更新角色名称")
                 return {"success": False, "error": "短期记忆模块不可用"}
             
             # 调用ShortTermMemory的更新方法
-            result = await self.short_term.update_role_names(session_id, user_id)
+            result = await self.short_term_memory.update_role_names(session_id, user_id)
             
             # 添加成功标记
             result["success"] = len(result.get("errors", [])) == 0
@@ -705,32 +457,6 @@ class MemoryManager:
         except Exception as e:
             logger.error(f"更新会话角色名称失败: {str(e)}")
             return {"success": False, "error": str(e)}
-
-    async def _record_failed_archive(self, session_id: str, user_id: str, message: dict) -> None:
-        """记录归档失败的消息"""
-        try:
-            # 确保数据库连接可用
-            if not self.long_term or not self.long_term.db:
-                logger.error("无法记录归档失败消息：数据库连接不可用")
-                return
-                
-            # 构建失败记录
-            failed_archive = {
-                "session_id": session_id,
-                "user_id": user_id,
-                "message": message,
-                "failed_at": datetime.utcnow(),
-                "status": "pending_retry"
-            }
-            
-            # 插入到失败记录集合
-            result = await self.long_term.db.failed_archives.insert_one(failed_archive)
-            if result.inserted_id:
-                logger.info(f"已记录归档失败消息: {result.inserted_id}")
-            else:
-                logger.error("记录归档失败消息失败")
-        except Exception as e:
-            logger.error(f"记录归档失败消息时出错: {str(e)}")
 
 # 全局变量保存单例实例
 _memory_manager = None

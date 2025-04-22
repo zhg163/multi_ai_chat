@@ -60,8 +60,8 @@ async def prepare_chat_context(session_id: str, user_id: str, role_id: str = Non
         # 获取记忆管理器
         memory_manager = await get_memory_manager()
         
-        # 获取会话消息
-        messages = memory_manager.short_term.get_session_messages(session_id, user_id)
+        # 获取会话历史消息
+        messages = await memory_manager.short_term_memory.get_session_messages(session_id, user_id)
         if not messages:
             logger.warning(f"会话为空: {session_id}")
             return "", []

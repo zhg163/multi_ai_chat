@@ -290,15 +290,15 @@ class MessageProcessingService:
         
         try:
             # 获取会话消息历史
-            message_history = await self.message_service.get_session_messages(
-                session_id=session_id,
-                limit=limit,
+        message_history = await self.message_service.get_session_messages(
+            session_id=session_id,
+            limit=limit,
                 offset=0,
                 sort_order="desc"  # 从新到旧
-            )
-            
+        )
+        
             # 将消息转换为对话格式
-            messages = []
+        messages = []
             for msg in reversed(message_history.items):  # 反转为从旧到新
                 # 忽略状态为错误或删除的消息
                 if msg.status in ["error", "deleted"]:
@@ -309,8 +309,8 @@ class MessageProcessingService:
                     "role": role,
                     "content": msg.content
                 })
-                
-            return messages
+            
+        return messages
         except Exception as e:
             logger.error(f"Failed to get conversation context: {str(e)}")
             return []
@@ -334,29 +334,29 @@ class MessageProcessingService:
         await self._ensure_initialized()
         
         try:
-            # 获取原始消息
-            original_message = await self.message_service.get_message_by_id(message_id)
-            if not original_message:
-                logger.error(f"Message {message_id} not found")
-                return None
-                
+        # 获取原始消息
+        original_message = await self.message_service.get_message_by_id(message_id)
+        if not original_message:
+            logger.error(f"Message {message_id} not found")
+            return None
+        
             # 确保是助手消息
-            if original_message.message_type != MessageType.ASSISTANT:
+        if original_message.message_type != MessageType.ASSISTANT:
                 logger.error(f"Cannot regenerate non-assistant message: {message_id}")
-                return None
-                
+            return None
+        
             # 获取父消息（用户问题）
             if not original_message.parent_id:
-                logger.error(f"Assistant message {message_id} has no parent message")
-                return None
-                
+            logger.error(f"Assistant message {message_id} has no parent message")
+            return None
+            
             parent_message = await self.message_service.get_message_by_id(original_message.parent_id)
-            if not parent_message:
+        if not parent_message:
                 logger.error(f"Parent message {original_message.parent_id} not found")
-                return None
-                
+            return None
+        
             # 获取会话ID
-            session_id = original_message.session_id
+        session_id = original_message.session_id
                 
             # 设置消息为"重新生成中"状态
             await self.message_service.update_message(
@@ -367,10 +367,10 @@ class MessageProcessingService:
                     "updated_at": datetime.utcnow()
                 }
             )
-            
+        
             # 获取对话历史
             conversation_history = await self.get_conversation_context(session_id, limit=10)
-            
+        
             # 获取角色
             if preferred_role_id:
                 # 使用指定角色
@@ -379,7 +379,7 @@ class MessageProcessingService:
                 # 使用原消息的角色
                 role_id = original_message.role_id
                 role = await self.role_service.get_role_by_id(role_id)
-                
+            
             if not role:
                 logger.error(f"Role not found for message {message_id}")
                 await self.message_service.update_message(
@@ -390,29 +390,29 @@ class MessageProcessingService:
                         "updated_at": datetime.utcnow()
                     }
                 )
-                return None
-                
-            # 获取角色提示
-            role_prompt = await self.role_selection_engine.get_role_prompt(
+            return None
+        
+        # 获取角色提示
+        role_prompt = await self.role_selection_engine.get_role_prompt(
                 role_id=str(role["_id"]),
-                message=parent_message.content,
-                conversation_history=conversation_history
-            )
-            
-            # 异步生成新回复
-            asyncio.create_task(
-                self._generate_ai_response(
-                    message_id=message_id,
+            message=parent_message.content,
+            conversation_history=conversation_history
+        )
+        
+        # 异步生成新回复
+        asyncio.create_task(
+            self._generate_ai_response(
+                message_id=message_id,
                     role_id=str(role["_id"]),
-                    user_message=parent_message.content,
-                    role_prompt=role_prompt,
-                    conversation_history=conversation_history,
-                    temperature=role.get("temperature", 0.7)
-                )
+                user_message=parent_message.content,
+                role_prompt=role_prompt,
+                conversation_history=conversation_history,
+                temperature=role.get("temperature", 0.7)
             )
-            
+        )
+        
             # 返回更新的消息
-            return await self.message_service.get_message_by_id(message_id)
+        return await self.message_service.get_message_by_id(message_id) 
         except Exception as e:
             logger.error(f"Error regenerating response: {str(e)}")
             return None 

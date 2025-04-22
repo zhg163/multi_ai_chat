@@ -6,7 +6,7 @@ from datetime import datetime
 import logging
 import json
 
-from ..services.session_service import SessionService
+from ..services.custom_session_service import CustomSessionService
 from ..auth.auth_bearer import JWTBearer
 from ..auth.auth_handler import get_current_user, get_current_user_or_none
 from ..models.user import User
@@ -70,7 +70,7 @@ async def create_session(
 ):
     """创建会话"""
     try:
-        session = await SessionService.create_session(
+        session = await CustomSessionService.create_session(
             current_user["id"],
             title=session_data.title,
             description=session_data.description,
@@ -112,7 +112,7 @@ async def list_sessions(
         # 使用skip参数值（如果提供）作为offset
         final_offset = skip if skip is not None else offset
             
-        sessions = await SessionService.list_sessions(
+        sessions = await CustomSessionService.list_sessions(
             current_user["id"],
             limit=limit,
             offset=final_offset,
@@ -137,7 +137,7 @@ async def get_session(
 ):
     """获取会话详情"""
     try:
-        session = await SessionService.get_session(session_id, current_user["id"])
+        session = await CustomSessionService.get_session(session_id, current_user["id"])
         
         if not session:
             raise HTTPException(status_code=404, detail="会话不存在或无权访问")
@@ -162,7 +162,7 @@ async def update_session(
 ):
     """更新会话基本信息"""
     try:
-        success = await SessionService.update_session(
+        success = await CustomSessionService.update_session(
             session_id,
             current_user["id"],
             session_data.dict(exclude_unset=True)
@@ -182,7 +182,7 @@ async def update_session_roles(
 ):
     """更新会话角色"""
     try:
-        success = await SessionService.configure_session_roles(
+        success = await CustomSessionService.configure_session_roles(
             session_id,
             current_user["id"],
             role_data.role_ids
@@ -207,7 +207,7 @@ async def update_session_settings(
         if not settings_dict:
             raise HTTPException(status_code=400, detail="没有提供需要更新的设置")
             
-        success = await SessionService.configure_session_settings(
+        success = await CustomSessionService.configure_session_settings(
             session_id,
             current_user["id"],
             settings_dict
@@ -228,7 +228,7 @@ async def archive_session(
     try:
         # 使用默认用户ID（如果未认证）
         user_id = current_user["id"] if current_user else "anonymous_user"
-        success = await SessionService.archive_session(session_id, user_id)
+        success = await CustomSessionService.archive_session(session_id, user_id)
         return {"success": success}
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -244,7 +244,7 @@ async def archive_session_put(
     try:
         # 使用默认用户ID（如果未认证）
         user_id = current_user["id"] if current_user else "anonymous_user"
-        success = await SessionService.archive_session(session_id, user_id)
+        success = await CustomSessionService.archive_session(session_id, user_id)
         return {"success": success}
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -260,7 +260,7 @@ async def restore_session(
     try:
         # 使用默认用户ID（如果未认证）
         user_id = current_user["id"] if current_user else "anonymous_user"
-        success = await SessionService.restore_session(session_id, user_id)
+        success = await CustomSessionService.restore_session(session_id, user_id)
         return {"success": success}
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -276,7 +276,7 @@ async def restore_session_put(
     try:
         # 使用默认用户ID（如果未认证）
         user_id = current_user["id"] if current_user else "anonymous_user"
-        success = await SessionService.restore_session(session_id, user_id)
+        success = await CustomSessionService.restore_session(session_id, user_id)
         return {"success": success}
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -290,7 +290,7 @@ async def delete_session(
 ):
     """删除会话"""
     try:
-        success = await SessionService.delete_session(session_id, current_user["id"])
+        success = await CustomSessionService.delete_session(session_id, current_user["id"])
         return {"success": success}
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -305,7 +305,7 @@ async def get_session_roles(
 ):
     """获取会话角色列表"""
     try:
-        roles = await SessionService.get_session_roles(session_id, current_user["id"])
+        roles = await CustomSessionService.get_session_roles(session_id, current_user["id"])
         return roles
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -320,7 +320,7 @@ async def add_session_role(
 ):
     """添加角色到会话"""
     try:
-        success = await SessionService.add_session_role(session_id, current_user["id"], role_id)
+        success = await CustomSessionService.add_session_role(session_id, current_user["id"], role_id)
         return {"success": success}
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -335,7 +335,7 @@ async def remove_session_role(
 ):
     """从会话中移除角色"""
     try:
-        success = await SessionService.remove_session_role(session_id, current_user["id"], role_id)
+        success = await CustomSessionService.remove_session_role(session_id, current_user["id"], role_id)
         return {"success": success}
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -350,7 +350,7 @@ async def has_session_role(
 ):
     """检查会话是否包含特定角色"""
     try:
-        has_role = await SessionService.has_session_role(session_id, current_user["id"], role_id)
+        has_role = await CustomSessionService.has_session_role(session_id, current_user["id"], role_id)
         return {"has_role": has_role}
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -365,7 +365,7 @@ async def permanently_delete_session(
 ):
     """永久删除会话（从数据库彻底删除，不可恢复）"""
     try:
-        success = await SessionService.permanently_delete_session(session_id, current_user["id"])
+        success = await CustomSessionService.permanently_delete_session(session_id, current_user["id"])
         return {"success": success}
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -379,7 +379,7 @@ async def clean_deleted_sessions(
 ):
     """清理用户的已删除会话"""
     try:
-        count = await SessionService.clean_deleted_sessions(current_user["id"], older_than_days)
+        count = await CustomSessionService.clean_deleted_sessions(current_user["id"], older_than_days)
         return {"success": True, "deleted_count": count}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"清理已删除会话失败: {str(e)}")
@@ -392,7 +392,7 @@ async def change_session_status(
 ):
     """修改会话状态"""
     try:
-        success = await SessionService.change_session_status(session_id, current_user["id"], new_status)
+        success = await CustomSessionService.change_session_status(session_id, current_user["id"], new_status)
         return {"success": success}
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -420,7 +420,7 @@ async def search_sessions(
 ):
     """高级会话搜索"""
     try:
-        result = await SessionService.search_sessions(
+        result = await CustomSessionService.search_sessions(
             current_user["id"],
             query=search_params.query,
             status=search_params.status,
@@ -453,7 +453,7 @@ async def search_sessions_get(
 ):
     """通过GET请求搜索会话（简化版，不包含时间筛选）"""
     try:
-        result = await SessionService.search_sessions(
+        result = await CustomSessionService.search_sessions(
             current_user["id"],
             query=query,
             status=status,
@@ -475,7 +475,7 @@ async def end_and_archive_session(
     request: Request = None,
     current_user: Optional[User] = Depends(get_current_user_or_none)
 ):
-    """结束会话并强制归档所有消息"""
+    """结束会话"""
     try:
         # 默认用户ID
         user_id = "anonymous_user"
@@ -494,44 +494,32 @@ async def end_and_archive_session(
         if user_id == "anonymous_user" and current_user:
             user_id = current_user.get("id", "anonymous_user")
         
-        logger.info(f"结束并归档会话: session_id={session_id}, user_id={user_id}")
+        logger.info(f"结束会话: session_id={session_id}, user_id={user_id}")
         
         # 获取记忆管理器
         from app.memory.memory_manager import get_memory_manager
         memory_manager = await get_memory_manager()
         
-        # 获取会话中所有消息
-        messages = memory_manager.short_term.get_session_messages(session_id, user_id)
+        # 获取会话消息
+        messages = await memory_manager.short_term_memory.get_session_messages(session_id, user_id)
         message_count = len(messages)
         
         if not messages:
             logger.warning(f"会话 {session_id} 没有消息可归档")
             return {
                 "success": False,
-                "archived_messages_count": 0,
                 "total_messages": 0,
-                "message": "会话没有消息可归档"
+                "message": "会话没有消息"
             }
         
-        # 归档消息计数
-        archived_count = 0
-        
-        # 逐条归档消息到MongoDB
-        for message in messages:
-            success = await memory_manager.archive_message(session_id, user_id, message)
-            if success:
-                archived_count += 1
-        
-        # 调用会话结束函数，生成摘要
+        # 调用会话结束函数
         result = await memory_manager.end_session(session_id, user_id)
         
         return {
             "success": True,
-            "archived_messages_count": archived_count,
             "total_messages": message_count,
-            "summary": result.get("summary", ""),
             "session_id": session_id
         }
     except Exception as e:
-        logger.error(f"结束并归档会话失败: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"结束并归档会话失败: {str(e)}") 
+        logger.error(f"结束会话失败: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"结束会话失败: {str(e)}") 

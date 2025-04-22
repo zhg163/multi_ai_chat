@@ -403,7 +403,7 @@
             </div>
         </div>
     </div>
-
+    
     <script>
         // 全局变量
         let roles = [];
@@ -478,14 +478,14 @@
             
             const messageEl = document.getElementById('message');
             if (messageEl) {
-                messageEl.textContent = text;
-                messageEl.className = `message ${type}`;
-                messageEl.style.display = 'block';
-                
-                // 5秒后自动隐藏
-                setTimeout(() => {
-                    messageEl.style.display = 'none';
-                }, 5000);
+            messageEl.textContent = text;
+            messageEl.className = `message ${type}`;
+            messageEl.style.display = 'block';
+            
+            // 5秒后自动隐藏
+            setTimeout(() => {
+                messageEl.style.display = 'none';
+            }, 5000);
             } else {
                 // 如果元素不存在，使用alert作为备选
                 console.error('消息元素未找到，使用alert代替');
@@ -791,13 +791,13 @@
                     document.querySelectorAll('.user-item').forEach(item => {
                         item.classList.remove('selected');
                     });
-                    
+            
                     // 设置当前用户为选中状态
                     userItem.classList.add('selected');
                     selectedUserId = user._id;
                     
                     console.log('已选用户ID:', selectedUserId);
-                    forceUpdateButtonState();
+            forceUpdateButtonState();
                 });
                 
                 userList.appendChild(userItem);
@@ -846,8 +846,8 @@
                 if (!sessionId) {
                     console.warn('发现没有有效ID的会话:', session);
                     return; // 跳过没有ID的会话
-                }
-                
+        }
+        
                 // 获取用户信息
                 let userName = '未知用户';
                 let userId = 'anonymous_user';
@@ -926,8 +926,8 @@
                         sessionData: session
                     });
                     openChatSession(sessionId, userName, userId);
-                });
-                
+                    });
+                    
                 // 添加删除会话的事件监听器
                 const deleteBtn = listItem.querySelector('.delete-session-btn');
                 deleteBtn.addEventListener('click', (e) => {
@@ -936,7 +936,7 @@
                         deleteSession(sessionId);
                     }
                 });
-                
+                    
                 // 点击整个会话项也可以打开会话
                 listItem.addEventListener('click', () => {
                     // 记录会话数据，便于调试
@@ -947,8 +947,8 @@
                         sessionData: session
                     });
                     openChatSession(sessionId, userName, userId);
-                });
-                
+            });
+            
                 sessionList.appendChild(listItem);
             });
         }
@@ -972,7 +972,7 @@
             userId = userId || 'anonymous_user';
             
             console.log(`打开会话: ${sessionId}, 用户: ${userName}, 用户ID: ${userId}`);
-            
+                
             // 跳转到RAG聊天页面，携带会话ID、用户名和用户ID参数
             window.location.href = `/static/rag-chat.html?session_id=${encodeURIComponent(sessionId)}&userName=${encodeURIComponent(userName)}&userId=${encodeURIComponent(userId)}`;
         }
@@ -1001,7 +1001,7 @@
                 if (response.ok) {
                     // 从本地会话列表中移除该会话
                     sessions = sessions.filter(session => getSessionId(session) !== sessionId);
-                    
+                
                     // 重新渲染会话列表
                     renderSessionList();
                     
@@ -1069,8 +1069,8 @@
                     const role = roles.find(r => r._id === roleId);
                     if (!role) {
                         console.warn(`未找到ID为${roleId}的角色信息`);
-                        return {
-                            role_id: roleId,
+                    return {
+                        role_id: roleId,
                             role_name: '未知角色'
                         };
                     }
@@ -1200,7 +1200,7 @@
             `;
             
             document.body.appendChild(toast);
-            
+                    
             // 添加关闭按钮事件
             const closeBtn = toast.querySelector('.close-btn');
             closeBtn.addEventListener('click', () => {

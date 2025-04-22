@@ -276,15 +276,13 @@ async def select_session_user(
         # 确保会话存在
         actual_session_id = await memory_manager.ensure_session_exists(user_id, session_id)
         
-        # 设置selected_username
-        session_key = f"session:{user_id}:{actual_session_id}"
-        
-        # 验证Redis连接可用
-        if not memory_manager.short_term or not memory_manager.short_term.redis:
-            raise HTTPException(status_code=500, detail="存储服务不可用")
+        # 检查内存管理器和Redis可用性
+        if not memory_manager.short_term_memory or not memory_manager.short_term_memory.redis:
+            raise HTTPException(status_code=500, detail="内存管理器或Redis不可用")
             
-        # 保存用户名到会话
-        memory_manager.short_term.redis.hset(session_key, "selected_username", username)
+        # 设置选定的用户名
+        session_key = f"session:{user_id}:{actual_session_id}"
+        await memory_manager.short_term_memory.redis.hset(session_key, "selected_username", username)
         logger.info(f"已为会话 {actual_session_id} 设置选中的用户名: {username}")
         
         return {"success": True, "message": f"已选择用户名: {username}"}

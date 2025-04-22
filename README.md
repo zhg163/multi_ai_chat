@@ -128,3 +128,11 @@ source venv/bin/activate  # Linux/Mac
 pip install -r requirements.txt
 
 nohup python3 -m uvicorn app.main:app --host 0.0.0.0 --port 8000 > output.log 2>&1 &
+
+
+kill -9 $(lsof -ti:8000)
+
+
+约束
+session使用custom_session.py
+

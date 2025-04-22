@@ -4,6 +4,7 @@ from typing import Dict, Any, List, Optional
 import json
 import asyncio
 import logging
+import uuid
 
 from ..services.rag_enhanced_service import RAGEnhancedService
 from ..services.llm_service import LLMService
@@ -71,11 +72,11 @@ async def chat_with_rag(
         session_id = request_data.get("session_id")
         role_id = request_data.get("role_id")
         stream = request_data.get("stream", True)
-        temperature = float(request_data.get("temperature", 0.7))
-        max_tokens = request_data.get("max_tokens")
-        message_id = request_data.get("message_id")
-        context_limit = request_data.get("context_limit")
-        auto_title = request_data.get("auto_title", False)
+        provider = request_data.get("provider")
+        model_name = request_data.get("model_name")
+        api_key = request_data.get("api_key")
+        auto_role_match = request_data.get("auto_role_match", False)
+        lang = request_data.get("lang", "zh")
         
         # 获取用户ID
         user_id = current_user.get("id") if current_user else None
@@ -89,20 +90,23 @@ async def chat_with_rag(
                     session_id=session_id,
                     user_id=user_id,
                     role_id=role_id,
-                    temperature=temperature,
-                    max_tokens=max_tokens,
                     stream=True,
-                    message_id=message_id,
-                    context_limit=context_limit,
-                    auto_title=auto_title
+                    provider=provider,
+                    model_name=model_name,
+                    api_key=api_key,
+                    auto_role_match=auto_role_match,
+                    lang=lang
                 ):
                     if isinstance(chunk, dict):
                         yield f"data: {json.dumps(chunk)}\n\n"
                     else:
+                        # 检查chunk是否为StreamResponse对象或具有content属性的对象
+                        content = chunk.content if hasattr(chunk, 'content') else chunk
+                        
                         # 文本块转换为符合SSE格式的JSON
                         sse_data = {
                             "choices": [{
-                                "delta": {"content": chunk},
+                                "delta": {"content": content},
                                 "index": 0,
                                 "finish_reason": None
                             }]
@@ -127,12 +131,12 @@ async def chat_with_rag(
                 session_id=session_id,
                 user_id=user_id,
                 role_id=role_id,
-                temperature=temperature,
-                max_tokens=max_tokens,
                 stream=False,
-                message_id=message_id,
-                context_limit=context_limit,
-                auto_title=auto_title
+                provider=provider,
+                model_name=model_name,
+                api_key=api_key,
+                auto_role_match=auto_role_match,
+                lang=lang
             ):
                 if isinstance(chunk, str):
                     full_response += chunk

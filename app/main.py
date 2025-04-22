@@ -347,7 +347,7 @@ async def select_user_login(
                 from app.memory.memory_manager import get_memory_manager
                 
                 memory_manager = await get_memory_manager()
-                messages = memory_manager.short_term.get_session_messages(session_id, "anonymous_user")
+                messages = await memory_manager.short_term_memory.get_session_messages(session_id, "anonymous_user")
                 
                 if messages:
                     # 创建一个新会话，归属于选中的用户
@@ -410,7 +410,7 @@ async def startup_event():
             logger.info("嵌入服务初始化完成")
         except Exception as e:
             logger.error(f"嵌入服务初始化失败: {str(e)}")
-        
+            
         # 初始化RAG增强服务
         try:
             from app.services.rag_enhanced_service import RAGEnhancedService
@@ -508,8 +508,8 @@ async def log_requests(request: Request, call_next):
                 if route_methods and method in route_methods:
                     routes_info.append(f"{route.path} [{','.join(route_methods)}]")
         
-        if routes_info:
-            logger.info(f"可能匹配的路由: {routes_info}")
+        # if routes_info:
+        #     logger.info(f"可能匹配的路由: {routes_info}")
     
     # 执行请求
     response = await call_next(request)
@@ -548,7 +548,7 @@ async def session_manager():
 async def session_manager_html_redirect():
     """重定向到会话管理页面"""
     logger.info("检测到直接访问/session_manager.html，重定向到/session-manager")
-    return RedirectResponse(url="/session-manager")
+    return RedirectResponse(url="/session-manager") 
 
 # 添加对rag-chat.html的重定向
 @app.get("/static/rag-chat.html", response_class=HTMLResponse)
@@ -561,3 +561,40 @@ async def rag_chat_html_redirect(request: Request):
     if query_params:
         redirect_url = f"{redirect_url}?{query_params}"
     return RedirectResponse(url=redirect_url) 
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """应用关闭时执行的操作，关闭所有资源连接"""
+    logger.info("正在关闭应用...")
+    
+    # 关闭LLM服务的会话
+    try:
+        from app.services.llm_service import LLMService
+        # 获取LLM服务实例进行关闭
+        from app.api.llm_routes import llm_service
+        if hasattr(llm_service, 'close') and callable(llm_service.close):
+            await llm_service.close()
+            logger.info("LLM服务会话已关闭")
+    except Exception as e:
+        logger.error(f"关闭LLM服务会话时出错: {str(e)}")
+    
+    # 关闭RAG增强服务的会话
+    try:
+        from app.services.rag_enhanced_service import RAGEnhancedService
+        from app.api.rag_chat_routes import rag_enhanced_service
+        if hasattr(rag_enhanced_service, 'close') and callable(rag_enhanced_service.close):
+            await rag_enhanced_service.close()
+            logger.info("RAG增强服务会话已关闭")
+    except Exception as e:
+        logger.error(f"关闭RAG增强服务会话时出错: {str(e)}")
+    
+    # 关闭Redis连接
+    try:
+        from app.services.redis_service import redis_service
+        if hasattr(redis_service, 'close') and callable(redis_service.close):
+            await redis_service.close()
+            logger.info("Redis连接已关闭")
+    except Exception as e:
+        logger.error(f"关闭Redis连接时出错: {str(e)}")
+    
+    logger.info("应用关闭完成") 

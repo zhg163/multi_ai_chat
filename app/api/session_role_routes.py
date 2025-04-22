@@ -1,9 +1,10 @@
 from fastapi import APIRouter, HTTPException, status, Depends, Query
 from typing import List, Optional
 from pydantic import BaseModel, Field
-
-from ..services.session_service import SessionService
+from ..services.custom_session_service import CustomSessionService
+from ..auth.auth_bearer import JWTBearer
 from ..auth.auth_handler import get_current_user
+import logging
 
 router = APIRouter(
     prefix="/api/sessions",
@@ -33,7 +34,7 @@ async def get_session_roles(
     """
     try:
         user_id = str(current_user["id"])
-        roles = await SessionService.get_session_roles(session_id, user_id)
+        roles = await CustomSessionService.get_session_roles(session_id, user_id)
         
         # 转换为响应模型格式
         response = []
@@ -69,7 +70,7 @@ async def add_session_role(
     """
     try:
         user_id = str(current_user["id"])
-        success = await SessionService.add_session_role(
+        success = await CustomSessionService.add_session_role(
             session_id=session_id,
             user_id=user_id,
             role_id=role_data.role_id
@@ -110,7 +111,7 @@ async def remove_session_role(
     """
     try:
         user_id = str(current_user["id"])
-        success = await SessionService.remove_session_role(
+        success = await CustomSessionService.remove_session_role(
             session_id=session_id,
             user_id=user_id,
             role_id=role_id
@@ -145,7 +146,7 @@ async def check_session_role(
     """
     try:
         user_id = str(current_user["id"])
-        has_role = await SessionService.has_session_role(
+        has_role = await CustomSessionService.has_session_role(
             session_id=session_id,
             user_id=user_id,
             role_id=role_id

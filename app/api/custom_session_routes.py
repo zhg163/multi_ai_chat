@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 import logging
 import traceback
 import sys
+import json
 
 from app.services.custom_session_service import CustomSessionService
 from app.auth.auth_bearer import JWTBearer
@@ -26,6 +27,7 @@ class RoleInfo(BaseModel):
     role_id: str = Field(..., description="角色ID")
     role_name: str = Field(..., description="角色名称")
     system_prompt: Optional[str] = Field(None, description="角色系统提示词")
+    keywords: Optional[List[str]] = Field(None, description="角色关键词列表")
 
 class SessionCreateRequest(BaseModel):
     class_id: str = Field(..., description="聊天室ID")
@@ -172,21 +174,71 @@ async def create_custom_session(
         from app.services.role_service import RoleService
         role_service = RoleService()
         
-        # 转换角色格式并添加system_prompt
+        # 转换角色格式并添加system_prompt和keywords
         roles = []
         for role in request.roles:
             role_info = {"role_id": role.role_id, "role_name": role.role_name}
             
-            # 客户端未提供system_prompt时，从服务器获取
-            if role.system_prompt is None:
-                try:
-                    role_data = await role_service.get_role_by_id(role.role_id)
+            # 获取角色完整信息
+            try:
+                role_data = await role_service.get_role_by_id(role.role_id)
+                
+                # 添加调试日志记录role_data的内容
+                logger.info(f"从数据库获取到的角色{role.role_id}数据: {role_data}")
+                logger.info(f"role_data类型: {type(role_data)}")
+                
+                # 如果role_service获取失败，直接尝试从数据库获取
+                if role_data is None:
+                    logger.warning(f"角色服务未返回角色数据，尝试直接从数据库获取: {role.role_id}")
+                    from app.database.connection import get_database
+                    from bson.objectid import ObjectId
+                    
+                    try:
+                        db = await get_database()
+                        if db is not None:
+                            role_data = await db.roles.find_one({"_id": ObjectId(role.role_id)})
+                            logger.info(f"直接从数据库获取到的角色数据: {role_data}")
+                    except Exception as db_error:
+                        logger.error(f"直接从数据库获取角色数据失败: {str(db_error)}")
+                
+                if role_data:
+                    logger.info(f"role_data的键: {role_data.keys() if hasattr(role_data, 'keys') else '不是字典类型'}")
+                    logger.info(f"role_data中是否包含keywords: {'keywords' in role_data if hasattr(role_data, '__contains__') else '无法检查'}")
+                    if 'keywords' in role_data:
+                        logger.info(f"role_data中的keywords值: {role_data['keywords']}")
+                        logger.info(f"keywords类型: {type(role_data['keywords'])}")
+                
+                # 处理system_prompt
+                if role.system_prompt is None:
                     if role_data and 'system_prompt' in role_data:
                         role_info['system_prompt'] = role_data['system_prompt']
-                except Exception as e:
-                    logger.warning(f"获取角色{role.role_id}的system_prompt失败: {str(e)}")
-            else:
-                role_info['system_prompt'] = role.system_prompt
+                else:
+                    role_info['system_prompt'] = role.system_prompt
+                
+                # 处理keywords
+                if role.keywords is None:
+                    logger.info(f"角色{role.role_id}的请求中未提供keywords")
+                    if role_data and 'keywords' in role_data:
+                        role_info['keywords'] = role_data['keywords']
+                        logger.info(f"使用数据库中的keywords: {role_data['keywords']}")
+                    else:
+                        logger.warning(f"数据库中也没有找到角色{role.role_id}的keywords")
+                else:
+                    role_info['keywords'] = role.keywords
+                    logger.info(f"使用请求中提供的keywords: {role.keywords}")
+                
+                # 如果仍然没有获取到keywords，添加一个空列表
+                if 'keywords' not in role_info:
+                    role_info['keywords'] = []
+                    logger.warning(f"最终为角色{role.role_id}设置空的keywords列表")
+                    
+                logger.info(f"为角色 {role.role_id} 添加了 keywords: {role_info.get('keywords', [])}")
+                
+            except Exception as e:
+                logger.warning(f"获取角色{role.role_id}的信息失败: {str(e)}")
+                # 添加默认keywords
+                if 'keywords' not in role_info:
+                    role_info['keywords'] = []
                 
             roles.append(role_info)
         
@@ -198,6 +250,61 @@ async def create_custom_session(
             user_name=request.user_name,
             roles=roles
         )
+        
+        # 记录创建的会话内容
+        logger.info(f"创建的会话数据: {session}")
+        logger.info(f"会话中的角色信息: {session.get('roles', [])}")
+        
+        # 创建成功后，立即同步到Redis
+        session_id = session.get("session_id")
+        if session_id:
+            logger.info(f"会话创建成功，正在同步到Redis: {session_id}")
+            from app.models.custom_session import CustomSession
+            
+            # 获取同步前的会话数据，用于对比
+            before_sync = await CustomSessionService.get_session(session_id)
+            logger.info(f"同步到Redis前的会话数据: {before_sync}")
+            
+            sync_result = await CustomSession.sync_session_to_redis(session_id, request.user_id)
+            logger.info(f"会话同步到Redis结果: {sync_result}, 会话ID: {session_id}")
+            
+            if sync_result:
+                # 尝试从Redis获取数据进行验证
+                try:
+                    from app.memory.memory_manager import MemoryManager
+                    memory_manager = MemoryManager()
+                    redis_data = await memory_manager.short_term_memory.get_session_info(session_id, request.user_id)
+                    logger.info(f"Redis中的会话数据: {redis_data}")
+                    
+                    # 尝试获取session键的所有值
+                    redis_client = memory_manager.short_term_memory.redis
+                    redis_session_key = f"session:{request.user_id}:{session_id}"
+                    raw_data = await redis_client.hgetall(redis_session_key)
+                    logger.info(f"Redis raw data: {raw_data}")
+                    
+                    # 检查并解析roles字段
+                    if raw_data and 'roles' in raw_data:
+                        try:
+                            roles_json = raw_data['roles']
+                            roles_data = json.loads(roles_json)
+                            logger.info(f"Redis中解析后的角色信息: {roles_data}")
+                            
+                            # 检查每个角色的keywords
+                            for role in roles_data:
+                                logger.info(f"角色: {role.get('role_name', 'unknown')}, keywords: {role.get('keywords', '未找到')}")
+                        except json.JSONDecodeError as json_err:
+                            logger.error(f"解析roles JSON失败: {str(json_err)}, 原始数据: {roles_json[:100]}...")
+                        except Exception as parse_err:
+                            logger.error(f"处理roles数据时出错: {str(parse_err)}")
+                    else:
+                        logger.warning(f"Redis中没有找到roles字段")
+                except Exception as e:
+                    logger.error(f"尝试从Redis读取会话数据时出错: {str(e)}")
+            
+            if not sync_result:
+                logger.warning(f"会话同步到Redis失败，可能会导致访问问题: {session_id}")
+        else:
+            logger.error(f"创建的会话缺少session_id字段，无法同步到Redis")
         
         return session
     except ValueError as e:
@@ -268,7 +375,7 @@ async def get_session(
         return session
     except Exception as e:
         logger.error(f"获取会话信息失败: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"获取会话信息失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"获取会话信息失败: {str(e)}") 
 
 @router.get("/{session_id}/sync", response_model=Dict[str, Any])
 async def sync_session(
@@ -301,7 +408,7 @@ async def sync_session(
         
         if direction in ["to_redis", "both"]:
             # 从MongoDB同步到Redis
-            redis_sync = await CustomSession.sync_session_to_redis(session_id)
+            redis_sync = await CustomSession.sync_session_to_redis(session_id, user_id)
             results["operations"].append({
                 "direction": "to_redis",
                 "success": redis_sync

@@ -272,9 +272,9 @@ async def select_user_login(
         new_session_id = None
         if session_id:
             try:
-                # 获取原始匿名会话的消息
+                # 获取消息历史
                 memory_manager = await get_memory_manager()
-                messages = memory_manager.short_term.get_session_messages(session_id, "anonymous_user")
+                messages = await memory_manager.short_term_memory.get_session_messages(session_id, "anonymous_user")
                 
                 if messages:
                     # 创建一个新会话，归属于选中的用户

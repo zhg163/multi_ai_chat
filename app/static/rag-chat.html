@@ -267,7 +267,12 @@
                 <div class="input-container">
                     <textarea id="user-input" placeholder="输入您的问题..." rows="3"></textarea>
                     <div class="input-controls">
-                        <div></div>
+                        <div>
+                            <label style="display: flex; align-items: center; font-size: 12px; color: #666;">
+                                <input type="checkbox" id="auto-role-match" style="margin-right: 5px;"> 
+                                启用智能角色匹配
+                            </label>
+                        </div>
                         <div style="display: flex; gap: 10px;">
                             <button id="stop-btn" disabled style="background-color: #f44336; color: white;">停止生成</button>
                             <button id="send-button">发送</button>
@@ -292,6 +297,8 @@
         let isLoadingHistory = false; // 标记是否正在加载历史消息
         let currentUserName = '用户'; // 默认用户名
         let currentUserId = null; // 存储用户ID
+        let selectedRoleId = null; // 选择的角色ID
+        let selectedRoleName = '智能助手'; // 当前选中的角色名称
 
         // 初始化参数
         function initializeParams() {
@@ -515,7 +522,7 @@
                     // 尝试从消息中获取用户名
                     senderName = msg.user_name || msg.sender || currentUserName;
                 } else if (role === 'assistant') {
-                    senderName = msg.assistant_name || 'DeepSeek AI';
+                    senderName = msg.assistant_name || selectedRoleName;
                 }
 
                 // 创建消息元素
@@ -578,6 +585,7 @@
 
             // 添加助手响应框
             const assistantMessageElement = addMessageToUI('assistant', '');
+            console.log('创建助手消息元素:', assistantMessageElement);
 
             try {
                 // 获取URL参数中的用户ID
@@ -592,11 +600,14 @@
                     messages: currentMessages,
                     stream: true,
                     temperature: 0.7,
+                    role_id: selectedRoleId,
                     message_id: currentMessageId,
+                    // 添加自动角色匹配参数
+                    auto_role_match: document.getElementById('auto-role-match').checked,
                     // 添加必需参数
                     provider: "deepseek",
                     model_name: "deepseek-chat",
-                    api_key: "sk-no-key-required-for-internal-api"
+                    api_key: ""  // 使用空字符串
                 };
 
                 // 如果有会话ID，添加到请求参数中
@@ -658,6 +669,7 @@
                 const decoder = new TextDecoder();
                 let responseText = '';
                 let references = null;
+                let startTime = Date.now();
 
                 // 处理流式响应
                 while (true) {
@@ -677,6 +689,7 @@
                         
                         if (line.startsWith('data: ') && line.length > 6) {
                             const data = line.substring(6).trim(); // 修改这里，确保正确处理数据前缀
+                            console.log('处理SSE数据行:', data.substring(0, 50) + (data.length > 50 ? '...' : ''));
 
                             // 检查是否为结束标记
                             if (data === '[DONE]') {
@@ -687,47 +700,87 @@
                             }
 
                             try {
-                                // 首先尝试解析为JSON
-                                let parsedData;
-                                try {
-                                    // 防止空数据或无效JSON
-                                    if (!data || data.trim() === '') {
-                                        console.log('跳过空数据');
-                                        continue;
-                                    }
-                                    
-                                    parsedData = JSON.parse(data);
-                                    console.log('成功解析JSON数据');
-                                } catch (e) {
-                                    // 记录JSON解析错误的详细信息
-                                    console.warn(`解析JSON失败 [${e.message}]，数据: "${data}"`);
-                                    
-                                    // 如果不是JSON，就直接将文本作为内容处理
-                                    console.log('作为纯文本处理:', data);
-                                    responseText += data;
-                                    updateAssistantMessage(assistantMessageElement, responseText);
+                                // 解析 JSON 数据
+                                let parsedData = JSON.parse(data);
+                                
+                                // 检查是否有错误
+                                if (parsedData.error) {
+                                    console.error('API错误:', parsedData.error);
+                                    const errorMsg = `<div style="color: red; padding: 10px; background-color: #ffeeee; border-radius: 5px;">
+                                        <strong>错误:</strong> ${parsedData.error}
+                                    </div>`;
+                                    const contentElement = assistantMessageElement.querySelector('.message-content');
+                                    contentElement.innerHTML += errorMsg;
                                     continue;
                                 }
-
-                                // 处理JSON格式响应
-                                if (parsedData.choices && parsedData.choices.length > 0) {
-                                    // 流式内容更新
-                                    const content = parsedData.choices[0].delta?.content || '';
-                                    if (content) {
-                                        responseText += content;
+                                
+                                // 处理消息ID
+                                if (parsedData.message_id) {
+                                    console.log('收到消息ID:', parsedData.message_id);
+                                    currentMessageId = parsedData.message_id;
+                                    stopButton.disabled = false;
+                                    continue;
+                                }
+                                
+                                // 处理角色匹配结果
+                                if (parsedData.role_match) {
+                                    console.log('角色匹配结果:', parsedData.role_match);
+                                    const roleMatch = parsedData.role_match;
+                                    
+                                    if (roleMatch.success && roleMatch.role) {
+                                        // 更新UI中的角色名称
+                                        const senderElement = assistantMessageElement.querySelector('.message-sender');
+                                        if (senderElement) {
+                                            const roleName = roleMatch.role.name || '助手';
+                                            senderElement.textContent = roleName;
+                                        }
+                                        
+                                        // 如果有匹配原因，显示它
+                                        if (roleMatch.role.match_reason) {
+                                            console.log('匹配原因:', roleMatch.role.match_reason);
+                                            const matchReasonElement = document.createElement('div');
+                                            matchReasonElement.className = 'match-reason';
+                                            matchReasonElement.innerHTML = `<small>匹配原因: ${roleMatch.role.match_reason}</small>`;
+                                            assistantMessageElement.insertBefore(matchReasonElement, assistantMessageElement.querySelector('.message-content'));
+                                        }
+                                    }
+                                    continue;
+                                }
+                                
+                                // 处理流式响应
+                                if (parsedData.event_type === 'content') {
+                                    if (parsedData.text) {
+                                        responseText += parsedData.text;
                                         updateAssistantMessage(assistantMessageElement, responseText);
                                     }
-                                } else if (parsedData.references) {
-                                    // 保存引用信息
+                                }
+                                // 处理引用信息
+                                else if (parsedData.event_type === 'references' && parsedData.references) {
                                     references = parsedData.references;
-                                } else if (parsedData.stopped) {
-                                    // 处理停止生成
-                                    isWaitingForResponse = false;
-                                    sendButton.disabled = false;
-                                    stopButton.disabled = true;
-                                } else if (parsedData.error) {
-                                    // 处理错误
-                                    assistantMessageElement.textContent = `错误: ${parsedData.error}`;
+                                }
+                                // 处理开始事件
+                                else if (parsedData.event_type === 'start') {
+                                    console.log('开始生成响应', parsedData);
+                                    startTime = Date.now();
+                                }
+                                // 处理结束事件
+                                else if (parsedData.event_type === 'end') {
+                                    console.log('生成响应完成', parsedData);
+                                    const endTime = Date.now();
+                                    console.log(`生成耗时: ${(endTime - startTime) / 1000}秒`);
+                                }
+                                // 处理停止事件
+                                else if (parsedData.event_type === 'stopped') {
+                                    console.log('生成已手动停止', parsedData);
+                                    const stoppedMsg = `<div style="color: #666; font-style: italic; margin-top: 8px; padding: 5px;">
+                                        消息生成已停止
+                                    </div>`;
+                                    const contentElement = assistantMessageElement.querySelector('.message-content');
+                                    contentElement.innerHTML += stoppedMsg;
+                                }
+                                // 处理其他未知事件类型
+                                else {
+                                    console.log('收到未知事件类型:', parsedData);
                                 }
                             } catch (e) {
                                 console.warn('解析响应数据失败:', e, data);
@@ -785,39 +838,19 @@
 
         // 停止生成
         async function stopGeneration() {
-            if (!currentMessageId) return;
+            if (!currentMessageId) {
+                console.log('没有当前消息ID，无法停止生成');
+                return;
+            }
 
             try {
-                // 获取URL参数中的用户ID
-                const urlParams = new URLSearchParams(window.location.search);
-                const userId = urlParams.get('userId');
-
+                console.log('停止生成消息:', currentMessageId);
+                
                 const requestData = {
-                    message_id: currentMessageId,
-                    // 添加必需参数
-                    provider: "deepseek",
-                    model_name: "deepseek-chat",
-                    api_key: "sk-no-key-required-for-internal-api"
+                    message_id: currentMessageId
                 };
 
-                // 如果有会话ID，添加到请求参数中
-                if (currentSessionId) {
-                    requestData.session_id = currentSessionId;
-                }
-
-                // 使用全局保存的用户ID
-                if (currentUserId) {
-                    requestData.user_id = currentUserId;
-                    console.log('停止生成请求使用已保存的用户ID:', currentUserId);
-                } else if (userId) {
-                    requestData.user_id = userId;
-                    console.log('停止生成请求从URL获取用户ID:', userId);
-                } else {
-                    requestData.user_id = 'anonymous_user';
-                    console.log('停止生成请求使用默认用户ID: anonymous_user');
-                }
-
-                const response = await fetch('/api/llm/chat/stop', {
+                const response = await fetch('/api/llm/chatrag/stop', {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json'
@@ -851,7 +884,7 @@
             if (role === 'user') {
                 senderElement.textContent = currentUserName;
             } else if (role === 'assistant') {
-                senderElement.textContent = 'DeepSeek AI';
+                senderElement.textContent = '等待中...'; // 默认显示"等待中"，将在接收到角色信息后更新
             }
 
             // 只为用户和助手消息添加发送人

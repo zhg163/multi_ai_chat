@@ -29,6 +29,18 @@ from app.config.defaults import (
     RAG_ENABLED_MODELS
 )
 
+# 角色系统配置
+ENABLE_ROLE_BASED_CHAT = True
+
+# 默认系统提示词
+DEFAULT_SYSTEM_PROMPT = "你是一位知识渊博的助手。请基于用户问题回答，如果提供了参考资料，请参考这些资料。"
+
+# 角色使用次数限制（0表示无限制）
+ROLE_USAGE_LIMIT = 0
+
+# Redis角色TTL配置（24小时）
+REDIS_ROLE_TTL = 86400
+
 # 为了向后兼容，将重要的配置直接暴露在模块级别
 memory_settings = {
     # 记忆配置项
@@ -42,6 +54,7 @@ memory_settings = {
     "REDIS_PORT": REDIS_PORT,
     "REDIS_PASSWORD": REDIS_PASSWORD,
     "REDIS_DB": REDIS_DB,
+    "REDIS_ROLE_TTL": REDIS_ROLE_TTL,
     
     # 聊天相关
     "MAX_CHAT_ROUNDS": MAX_CHAT_ROUNDS,
@@ -70,6 +83,10 @@ class Config:
     # 启用RAG功能的模型列表
     RAG_ENABLED_MODELS = RAG_ENABLED_MODELS
     
+    # 角色系统配置
+    ENABLE_ROLE_BASED_CHAT = ENABLE_ROLE_BASED_CHAT
+    DEFAULT_SYSTEM_PROMPT = DEFAULT_SYSTEM_PROMPT
+    
     # 需要维护与memory_settings一致的设置项，确保兼容
     @property
     def MONGO_URI(self):
@@ -94,4 +111,6 @@ class Config:
         return REDIS_PASSWORD
 
 # 创建配置实例
-config = Config() 
+settings = Config()
+# 为了向后兼容，保留config作为settings的别名
+config = settings 

@@ -2,7 +2,6 @@
 短期记忆模块 - 使用Redis实现的缓冲记忆
 """
 
-import redis
 import json
 import time
 import logging
@@ -12,6 +11,8 @@ from typing import Dict, Tuple, Optional
 import os
 import uuid
 from datetime import datetime
+from redis.asyncio import Redis
+from redis.exceptions import RedisError
 
 logger = logging.getLogger(__name__)
 
@@ -21,12 +22,42 @@ class ShortTermMemory:
     使用Redis列表存储对话历史，按消息添加顺序排列
     """
     
-    def __init__(self, redis_client: redis.Redis, max_rounds: int = 4):
+    def __init__(self, max_rounds: int = 4):
         """初始化BufferMemory"""
-        self.redis = redis_client
+        self.redis = None
         self.max_rounds = max_rounds
+        self.redis_url = None
         
-    def start_session(self, session_id: str, user_id: str, selected_username: str = None) -> str:
+    async def initialize(self):
+        """初始化Redis连接"""
+        try:
+            # 从环境变量或内存设置中获取配置
+            redis_host = os.getenv("REDIS_HOST", "localhost")
+            redis_port = int(os.getenv("REDIS_PORT", "6378"))
+            redis_password = os.getenv("REDIS_PASSWORD", "!qaz2wsX")
+            
+            self.redis_url = f"redis://{redis_host}:{redis_port}"
+            if redis_password:
+                self.redis_url = f"redis://:{redis_password}@{redis_host}:{redis_port}"
+                
+            self.redis = await Redis.from_url(
+                self.redis_url,
+                encoding="utf-8",
+                decode_responses=True
+            )
+            
+            # 测试连接
+            await self.redis.ping()
+            logger.info(f"成功连接到Redis服务器: {self.redis_url}")
+            
+        except RedisError as e:
+            logger.error(f"Redis连接失败: {str(e)}")
+            raise
+        except Exception as e:
+            logger.error(f"初始化短期记忆时出错: {str(e)}")
+            raise
+            
+    async def start_session(self, session_id: str, user_id: str, selected_username: str = None) -> str:
         """开始一个新的会话
         
         Args:
@@ -38,39 +69,41 @@ class ShortTermMemory:
             会话ID
         """
         try:
-            session_key = f"session:{user_id}:{session_id}"
+            # 使用新的标准格式
+            session_key = f"session:{session_id}"
             session = ChatSession(id=session_id, user_id=user_id)
             
             # 存储会话信息
-            self.redis.hset(session_key, "id", session.id)
-            self.redis.hset(session_key, "user_id", session.user_id)
-            self.redis.hset(session_key, "status", session.status)
-            self.redis.hset(session_key, "start_time", str(session.start_time))
+            await self.redis.hset(session_key, "id", session.id)
+            await self.redis.hset(session_key, "user_id", session.user_id)
+            await self.redis.hset(session_key, "status", session.status)
+            await self.redis.hset(session_key, "start_time", str(session.start_time))
             
             # 如果有选中的用户名称，存储到会话信息中
             if selected_username:
-                self.redis.hset(session_key, "selected_username", selected_username)
-                logger.info(f"会话关联用户名称: {selected_username}")
+                await self.redis.hset(session_key, "selected_username", selected_username)
             
-            logger.info(f"开始新会话: {session_id}, 用户: {user_id}")
+            logger.info(f"已开始新会话: {session_id}, 会话键: {session_key}")
             return session_id
+            
         except Exception as e:
-            logger.error(f"创建会话失败: {str(e)}")
+            logger.error(f"开始会话时出错: {str(e)}")
             raise
         
-    def end_session(self, session_id: str, user_id: str) -> bool:
+    async def end_session(self, session_id: str, user_id: str) -> bool:
         """结束会话"""
         try:
-            session_key = f"session:{user_id}:{session_id}"
+            # 使用新的标准格式
+            session_key = f"session:{session_id}"
             
             # 检查会话是否存在
-            if not self.redis.exists(session_key):
+            if not await self.redis.exists(session_key):
                 logger.warning(f"会话不存在: {session_id}")
                 return False
                 
             # 更新会话状态
-            self.redis.hset(session_key, "status", "completed")
-            self.redis.hset(session_key, "end_time", str(time.time()))
+            await self.redis.hset(session_key, "status", "completed")
+            await self.redis.hset(session_key, "end_time", str(datetime.now()))
             
             logger.info(f"结束会话: {session_id}, 用户: {user_id}")
             return True
@@ -199,227 +232,240 @@ class ShortTermMemory:
         """
         return f"messages:{user_id}:{session_id}"
         
-    async def add_message(self, session_id: str, user_id: str, role: str, content: str,
-                         role_id: str = None, message_id: str = None, metadata: dict = None) -> Tuple[bool, Optional[dict]]:
-        """添加消息到Redis缓存
-        
-        Args:
-            session_id: 会话ID
-            user_id: 用户ID 
-            role: 消息角色
-            content: 消息内容
-            role_id: 角色ID
-            message_id: 消息ID
-            metadata: 消息元数据
-            
-        Returns:
-            Tuple[bool, Optional[dict]]: (是否成功, 需要归档的消息)
-        """
-        try:
-            # 构建消息键
-            message_key = self._get_message_key(session_id, user_id)
-            
-            logger.info(f"添加消息到Redis，键: {message_key}, 角色: {role}, 内容长度: {len(content)}")
-            
-            # 获取当前消息数量
-            current_count = self.redis.llen(message_key)
-            logger.info(f"当前消息数量: {current_count}, 最大轮数: {self.max_rounds * 2}")
-            
-            # 构建元数据
-            metadata_dict = metadata or {}
-            if message_id:
-                metadata_dict["message_id"] = message_id
-            
-            # 构建消息
-            message = {
-                "role": role,
-                "content": content,
-                "timestamp": datetime.utcnow().isoformat(),
-                "role_id": role_id if role_id else ""
-            }
-            if metadata_dict:
-                message["metadata"] = metadata_dict
-                
-            # 添加消息到列表
-            self.redis.rpush(message_key, json.dumps(message))
-            
-            # 检查是否需要归档
-            should_archive = current_count >= (self.max_rounds * 2 - 1)  # 减1是因为我们刚添加了一条消息
-            oldest_message = None
-            
-            if should_archive:
-                try:
-                    # 获取最旧的消息
-                    oldest_message_json = self.redis.lindex(message_key, 0)
-                    if oldest_message_json:
-                        try:
-                            oldest_message = json.loads(oldest_message_json)
-                            # 删除最旧的消息
-                            self.redis.lpop(message_key)
-                            logger.info(f"已删除最旧消息: {oldest_message.get('role', '未知')} - {oldest_message.get('content', '')[:100]}")
-                        except json.JSONDecodeError as je:
-                            logger.error(f"解析最旧消息JSON失败: {str(je)}")
-                            oldest_message = None
-                    else:
-                        logger.warning("未找到最旧消息")
-                except Exception as e:
-                    logger.error(f"处理最旧消息失败: {str(e)}")
-                    oldest_message = None
-                    
-                # 确保消息列表长度不超过限制
-                try:
-                    self.redis.ltrim(message_key, 0, (self.max_rounds * 2) - 1)
-                    logger.info(f"已裁剪消息列表至 {self.max_rounds * 2} 条")
-                except Exception as e:
-                    logger.error(f"裁剪消息列表失败: {str(e)}")
-            
-            return True, oldest_message
-            
-        except Exception as e:
-            logger.error(f"添加消息失败: {str(e)}")
-            return False, None
-            
-    async def add_message_with_retry(self, session_id: str, user_id: str, role: str, content: str, 
-                                role_id: str = None, message_id: str = None, metadata: dict = None, max_retries=3) -> tuple:
-        """
-        添加消息到会话，带重试机制
+    async def add_message(self, session_id: str, user_id: str, message: Message) -> None:
+        """添加消息到会话历史
         
         Args:
             session_id: 会话ID
             user_id: 用户ID
-            role: 消息角色
-            content: 消息内容
-            role_id: 角色ID
-            message_id: 消息ID
-            metadata: 消息元数据
-            max_retries: 最大重试次数
-            
-        Returns:
-            (bool, dict): 添加是否成功，以及可能需要归档的消息
+            message: 消息对象
         """
-        # 初始化
-        retries = 0
-        result = False
-        message = None
-        
-        # 重试循环
-        while retries < max_retries and not result:
-            if retries > 0:
-                logger.info(f"正在尝试第{retries+1}次添加消息...")
-                
-            try:
-                result, message = await self.add_message(
-                    session_id=session_id,
-                    user_id=user_id,
-                    role=role,
-                    content=content,
-                    role_id=role_id,
-                    message_id=message_id,
-                    metadata=metadata
-                )
-                
-                if result:
-                    logger.info(f"成功添加消息，尝试次数: {retries+1}")
-                    break
-                    
-            except redis.ConnectionError as e:
-                retries += 1
-                logger.warning(f"Redis连接错误，尝试重新连接 ({retries}/{max_retries}): {str(e)}")
-                time.sleep(0.5)  # 短暂延迟后重试
-                # 尝试重新初始化连接
-                try:
-                    self.redis = redis.Redis(
-                        host=os.getenv("REDIS_HOST", "localhost"),
-                        port=int(os.getenv("REDIS_PORT", "6378")),
-                        password=os.getenv("REDIS_PASSWORD", "!qaz2wsX"),
-                        decode_responses=True
-                    )
-                    # 测试连接
-                    self.redis.ping()
-                except Exception as conn_error:
-                    logger.error(f"Redis重连失败: {str(conn_error)}")
-                
-        # 如果重试失败，记录错误并返回失败
-        logger.error(f"添加消息到Redis失败，已重试{max_retries}次")
-        return False, None
-        
-    def get_session_messages(self, session_id: str, user_id: str) -> list:
-        """获取会话的所有消息，按时间顺序排列（旧->新）"""
         try:
+            # 使用新的标准格式
+            session_key = f"session:{session_id}"
             message_key = self._get_message_key(session_id, user_id)
             
-            # 获取所有消息
-            messages_json = self.redis.lrange(message_key, 0, -1)
+            # 检查会话是否存在
+            if not await self.redis.exists(session_key):
+                raise ValueError(f"会话不存在: {session_id}")
+                
+            # 序列化消息
+            message_data = {
+                "id": message.id,
+                "content": message.content,
+                "role": message.role,
+                "timestamp": str(message.timestamp)
+            }
+            
+            # 添加到消息列表
+            await self.redis.rpush(message_key, json.dumps(message_data))
+            
+            # 如果历史记录超过最大轮数，删除最旧的消息
+            history_length = await self.redis.llen(message_key)
+            if history_length > self.max_rounds * 2:  # 每轮包含用户和AI的消息
+                await self.redis.lpop(message_key)
+                
+            logger.info(f"已添加消息到会话 {session_id}: {message.content[:50]}...")
+            
+        except Exception as e:
+            logger.error(f"添加消息时出错: {str(e)}")
+            raise
+            
+    async def get_session_history(self, session_id: str, user_id: str) -> Tuple[ChatSession, list]:
+        """获取会话历史
+        
+        Args:
+            session_id: 会话ID
+            user_id: 用户ID
+            
+        Returns:
+            (会话对象, 消息列表)
+        """
+        try:
+            # 使用新的标准格式
+            session_key = f"session:{session_id}"
+            message_key = self._get_message_key(session_id, user_id)
+            
+            # 检查会话是否存在
+            if not await self.redis.exists(session_key):
+                raise ValueError(f"会话不存在: {session_id}")
+                
+            # 获取会话信息
+            session_data = await self.redis.hgetall(session_key)
+            session = ChatSession(
+                id=session_data["id"],
+                user_id=session_data["user_id"],
+                status=session_data["status"],
+                start_time=datetime.fromisoformat(session_data["start_time"])
+            )
+            
+            # 获取历史消息
+            history = []
+            message_data_list = await self.redis.lrange(message_key, 0, -1)
+            for msg_data in message_data_list:
+                msg_dict = json.loads(msg_data)
+                history.append(Message(
+                    id=msg_dict["id"],
+                    content=msg_dict["content"],
+                    role=msg_dict["role"],
+                    timestamp=datetime.fromisoformat(msg_dict["timestamp"])
+                ))
+                
+            logger.info(f"已获取会话 {session_id} 的历史记录，共 {len(history)} 条消息")
+            return session, history
+            
+        except Exception as e:
+            logger.error(f"获取会话历史时出错: {str(e)}")
+            raise
+            
+    async def clear_session(self, session_id: str, user_id: str) -> None:
+        """清除会话数据
+        
+        Args:
+            session_id: 会话ID
+            user_id: 用户ID
+        """
+        try:
+            # 使用新的标准格式
+            session_key = f"session:{session_id}"
+            message_key = self._get_message_key(session_id, user_id)
+            
+            # 删除会话和消息记录（移除内存键）
+            await self.redis.delete(session_key, message_key)
+            logger.info(f"已清除会话数据: {session_id}")
+            
+        except Exception as e:
+            logger.error(f"清除会话数据时出错: {str(e)}")
+            raise
+            
+    async def get_session_messages(self, session_id: str, user_id: str) -> list:
+        """获取会话消息列表
+        
+        Args:
+            session_id: 会话ID
+            user_id: 用户ID
+            
+        Returns:
+            消息列表
+        """
+        try:
+            # 获取消息列表
+            message_key = self._get_message_key(session_id, user_id)
+            message_data_list = await self.redis.lrange(message_key, 0, -1)
             
             # 解析消息
             messages = []
-            for msg in messages_json:
+            for msg_data in message_data_list:
                 try:
-                    messages.append(json.loads(msg))
+                    msg_dict = json.loads(msg_data)
+                    messages.append(msg_dict)
                 except json.JSONDecodeError:
-                    logger.error(f"解析消息JSON失败: {msg}")
+                    logger.error(f"无法解析消息: {msg_data}")
             
+            logger.info(f"获取会话 {session_id} 的消息列表，共 {len(messages)} 条")
             return messages
+            
         except Exception as e:
-            logger.error(f"获取会话消息失败: {str(e)}")
+            logger.error(f"获取会话消息列表时出错: {str(e)}")
             return []
             
-    def get_session_info(self, session_id: str, user_id: str) -> dict:
-        """获取会话信息"""
+    async def get_session_info(self, session_id: str, user_id: str) -> dict:
+        """获取会话信息
+        
+        Args:
+            session_id: 会话ID
+            user_id: 用户ID
+            
+        Returns:
+            会话信息
+        """
         try:
-            session_key = f"session:{user_id}:{session_id}"
+            # 使用新的标准格式
+            session_key = f"session:{session_id}"
             
             # 检查会话是否存在
-            if not self.redis.exists(session_key):
+            if not await self.redis.exists(session_key):
                 logger.warning(f"会话不存在: {session_id}")
                 return None
                 
             # 获取会话信息
-            session_data = self.redis.hgetall(session_key)
-            
+            session_data = await self.redis.hgetall(session_key)
+            logger.info(f"获取会话信息: {session_id}")
             return session_data
+            
         except Exception as e:
-            logger.error(f"获取会话信息失败: {str(e)}")
+            logger.error(f"获取会话信息时出错: {str(e)}")
             return None
             
-    def count_tokens(self, session_id: str, user_id: str) -> int:
-        """估算会话中的token数量"""
+    async def count_tokens(self, session_id: str, user_id: str) -> int:
+        """计算会话中的token数量
+        
+        Args:
+            session_id: 会话ID
+            user_id: 用户ID
+            
+        Returns:
+            token数量
+        """
         try:
-            # 使用get_session_messages获取消息，确保一致性
-            messages = self.get_session_messages(session_id, user_id)
+            # 使用新的消息key格式
+            message_key = self._get_message_key(user_id, session_id)
+            
+            # 获取所有消息
+            messages = await self.redis.lrange(message_key, 0, -1)
+            
             if not messages:
                 return 0
                 
-            # 简单估算：假设平均每个字符是1.5个token
-            text = ""
-            for msg in messages:
-                text += msg.get("content", "")
+            # 解析消息并计算token
+            token_count = 0
+            for message_json in messages:
+                message = json.loads(message_json)
+                content = message.get("content", "")
+                token_count += len(content) // 4  # 简单估算
                 
-            return int(len(text) * 1.5)  # 简单估算
+            logger.info(f"会话 {session_id} 的token数量: {token_count}")
+            return token_count
+            
         except Exception as e:
-            logger.error(f"计算token数量失败: {str(e)}")
+            logger.error(f"计算token数量时出错: {str(e)}")
             return 0
     
-    def list_active_sessions(self, user_id: str) -> list:
-        """列出用户的所有活跃会话"""
+    async def list_active_sessions(self, user_id: str) -> list:
+        """列出用户的所有活跃会话
+        
+        Args:
+            user_id: 用户ID
+            
+        Returns:
+            活跃会话列表
+        """
         try:
-            # 查找所有会话键
-            pattern = f"session:{user_id}:*"
-            session_keys = self.redis.keys(pattern)
+            # 获取所有会话
+            sessions = await self.redis.keys(f"session:{user_id}:*")
             
             active_sessions = []
-            for key in session_keys:
-                # 获取会话状态
-                status = self.redis.hget(key, "status")
-                if status == "active":
-                    session_id = key.split(":")[-1]
-                    session_data = self.redis.hgetall(key)
-                    active_sessions.append(session_data)
-            
+            for session_key in sessions:
+                # 获取会话信息
+                session_data = await self.redis.hgetall(session_key)
+                if not session_data:
+                    continue
+                    
+                # 检查会话状态
+                if session_data.get("status") == "active":
+                    session_id = session_key.decode().split(":")[-1]
+                    active_sessions.append({
+                        "session_id": session_id,
+                        "start_time": session_data.get("start_time", ""),
+                        "message_count": await self.redis.llen(f"history:{user_id}:{session_id}")
+                    })
+                    
+            logger.info(f"用户 {user_id} 的活跃会话数量: {len(active_sessions)}")
             return active_sessions
+            
         except Exception as e:
-            logger.error(f"列出活跃会话失败: {str(e)}")
-            return []
+            logger.error(f"获取活跃会话列表时出错: {str(e)}")
+            raise
 
     async def update_role_names(self, user_id: str, session_id: str) -> dict:
         """

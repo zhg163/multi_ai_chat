@@ -26,5 +26,5 @@ yarl==1.9.5
 sse-starlette>=1.6.5
 
 # 新增依赖
-redis==4.5.5
+redis>=5.0.0
 httpx==0.25.0

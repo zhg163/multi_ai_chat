@@ -3,14 +3,13 @@
 """
 
 from app.memory.buffer_memory import ShortTermMemory
-from app.memory.summary_memory import LongTermMemory
-from app.memory.memory_manager import get_memory_manager
-from app.memory.schemas import SessionResponse, MemoryContext
+from app.memory.memory_manager import MemoryManager, get_memory_manager
+from app.memory.schemas import Message, ChatSession
 
 __all__ = [
-    'ShortTermMemory', 
-    'LongTermMemory', 
+    'ShortTermMemory',
+    'MemoryManager',
     'get_memory_manager',
-    'SessionResponse',
-    'MemoryContext'
+    'Message',
+    'ChatSession'
 ] 

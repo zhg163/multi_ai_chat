@@ -41,6 +41,10 @@ class Config:
     # 启用RAG功能的模型列表
     RAG_ENABLED_MODELS: list = ["gpt-3.5-turbo", "gpt-4", "deepseek-chat"]
     
+    # 角色系统配置
+    ENABLE_ROLE_BASED_CHAT: bool = True
+    DEFAULT_SYSTEM_PROMPT: str = "你是一位知识渊博的助手。请基于用户问题回答，如果提供了参考资料，请参考这些资料。"
+    
     # 需要维护与memory_settings一致的设置项，确保兼容
     @property
     def MONGO_URI(self):

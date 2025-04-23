@@ -368,14 +368,27 @@ async def get_session(
         
         # 转换时间为ISO格式字符串
         if "created_at" in session:
-            session["created_at"] = session["created_at"].isoformat()
+            # Check if created_at is already a string
+            if not isinstance(session["created_at"], str):
+                try:
+                    session["created_at"] = session["created_at"].isoformat()
+                except AttributeError:
+                    # Handle the case where it's not a datetime object but also not a string
+                    session["created_at"] = str(session["created_at"])
+        
         if "updated_at" in session:
-            session["updated_at"] = session["updated_at"].isoformat()
+            # Check if updated_at is already a string
+            if not isinstance(session["updated_at"], str):
+                try:
+                    session["updated_at"] = session["updated_at"].isoformat()
+                except AttributeError:
+                    # Handle the case where it's not a datetime object but also not a string
+                    session["updated_at"] = str(session["updated_at"])
         
         return session
     except Exception as e:
         logger.error(f"获取会话信息失败: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"获取会话信息失败: {str(e)}") 
+        raise HTTPException(status_code=500, detail=f"获取会话信息失败: {str(e)}")
 
 @router.get("/{session_id}/sync", response_model=Dict[str, Any])
 async def sync_session(

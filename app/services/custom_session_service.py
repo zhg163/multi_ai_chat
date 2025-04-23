@@ -169,8 +169,22 @@ class CustomSessionService:
         
         for session in sessions:
             session['_id'] = str(session['_id'])
-            session['created_at'] = session['created_at'].isoformat()
-            session['updated_at'] = session['updated_at'].isoformat()
+            
+            # Handle created_at field safely
+            if 'created_at' in session and session['created_at'] is not None:
+                if not isinstance(session['created_at'], str):
+                    try:
+                        session['created_at'] = session['created_at'].isoformat()
+                    except AttributeError:
+                        session['created_at'] = str(session['created_at'])
+            
+            # Handle updated_at field safely
+            if 'updated_at' in session and session['updated_at'] is not None:
+                if not isinstance(session['updated_at'], str):
+                    try:
+                        session['updated_at'] = session['updated_at'].isoformat()
+                    except AttributeError:
+                        session['updated_at'] = str(session['updated_at'])
         
         return sessions, total
 

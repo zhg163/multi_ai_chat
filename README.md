@@ -136,3 +136,4 @@ kill -9 $(lsof -ti:8000)
 约束
 session使用custom_session.py
 
+ps -ef | grep python | grep uvicorn | grep -v grep

@@ -1,0 +1,561 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>两阶段流式API演示</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body {
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .chat-container {
+            height: 500px;
+            overflow-y: auto;
+            background-color: white;
+            border-radius: 5px;
+            padding: 15px;
+            margin-bottom: 15px;
+            border: 1px solid #ddd;
+        }
+        .message {
+            margin-bottom: 10px;
+            padding: 10px;
+            border-radius: 5px;
+            max-width: 80%;
+        }
+        .user-message {
+            background-color: #d1e7ff;
+            margin-left: auto;
+            text-align: right;
+        }
+        .assistant-message {
+            background-color: #f0f0f0;
+            margin-right: auto;
+        }
+        .message-container {
+            display: flex;
+            margin-bottom: 15px;
+        }
+        #errorContainer {
+            display: none;
+            margin-top: 15px;
+        }
+        .typing-indicator {
+            display: inline-block;
+            padding: 5px 10px;
+            background-color: #f0f0f0;
+            border-radius: 10px;
+            font-style: italic;
+            color: #666;
+            margin-bottom: 10px;
+        }
+        .typing-indicator:after {
+            content: "...";
+            animation: dots 1.5s steps(5, end) infinite;
+        }
+        @keyframes dots {
+            0%, 20% { content: "."; }
+            40% { content: ".."; }
+            60%, 100% { content: "..."; }
+        }
+        #phase2Container {
+            display: none;
+            margin-top: 15px;
+            padding: 15px;
+            background-color: #f8f9fa;
+            border-radius: 5px;
+            border: 1px solid #ddd;
+        }
+        #feedbackBtns {
+            margin-top: 10px;
+        }
+        .role-info {
+            margin-bottom: 10px;
+            padding: 10px;
+            background-color: #e2f2ff;
+            border-radius: 5px;
+            font-size: 14px;
+            border-left: 3px solid #0d6efd;
+        }
+        .info-panel {
+            margin-bottom: 20px;
+            padding: 15px;
+            background-color: #f8f9fa;
+            border-radius: 5px;
+            border: 1px solid #ddd;
+        }
+        .improving-indicator {
+            display: none;
+            margin-top: 15px;
+            padding: 10px;
+            background-color: #fff3cd;
+            border-radius: 5px;
+            border: 1px solid #ffeeba;
+            color: #856404;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1 class="mb-4">两阶段流式API演示</h1>
+        
+        <div class="row">
+            <div class="col-md-8">
+                <div class="info-panel">
+                    <h4>当前会话信息</h4>
+                    <div id="sessionInfo">未创建会话</div>
+                </div>
+                
+                <div id="chatContainer" class="chat-container">
+                    <!-- 聊天消息将在这里动态添加 -->
+                </div>
+                
+                <div id="typingIndicator" class="typing-indicator" style="display: none;">AI正在思考</div>
+                
+                <div class="mb-3">
+                    <label for="userInput" class="form-label">发送消息</label>
+                    <textarea id="userInput" class="form-control" rows="3" placeholder="输入您的问题..."></textarea>
+                </div>
+                
+                <button id="sendBtn" class="btn btn-primary">发送</button>
+                
+                <div id="phase2Container" class="mt-3">
+                    <h4>确认AI回复是否满意</h4>
+                    <p>这是第二阶段的反馈，如果您对这个回答满意，点击接受；如果不满意，点击拒绝，系统会尝试改进回答。</p>
+                    <div id="feedbackBtns">
+                        <button id="acceptBtn" class="btn btn-success">接受</button>
+                        <button id="rejectBtn" class="btn btn-danger">拒绝</button>
+                    </div>
+                </div>
+                
+                <div id="improvingIndicator" class="improving-indicator">
+                    正在基于您的反馈生成改进的回答...
+                </div>
+                
+                <div id="errorContainer" class="alert alert-danger mt-3">
+                    <strong>错误：</strong> <span id="errorMessage"></span>
+                </div>
+            </div>
+            
+            <div class="col-md-4">
+                <div class="info-panel">
+                    <h4>角色信息</h4>
+                    <div id="roleInfo"></div>
+                </div>
+                
+                <div class="info-panel">
+                    <h4>使用说明</h4>
+                    <p>1. 点击"创建会话"按钮创建一个新的聊天会话</p>
+                    <p>2. 在文本框输入消息并发送</p>
+                    <p>3. 系统会自动选择合适的角色进行回复</p>
+                    <p>4. 收到回复后，您可以评价回复质量</p>
+                    <p>5. 如果不满意，系统会尝试改进回复</p>
+                </div>
+                
+                <button id="createSessionBtn" class="btn btn-outline-primary w-100 mb-3">创建会话</button>
+                <button id="clearChatBtn" class="btn btn-outline-secondary w-100">清空聊天记录</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            // DOM 元素
+            const chatContainer = document.getElementById('chatContainer');
+            const userInput = document.getElementById('userInput');
+            const sendBtn = document.getElementById('sendBtn');
+            const errorContainer = document.getElementById('errorContainer');
+            const errorMessage = document.getElementById('errorMessage');
+            const phase2Container = document.getElementById('phase2Container');
+            const acceptBtn = document.getElementById('acceptBtn');
+            const rejectBtn = document.getElementById('rejectBtn');
+            const createSessionBtn = document.getElementById('createSessionBtn');
+            const clearChatBtn = document.getElementById('clearChatBtn');
+            const sessionInfo = document.getElementById('sessionInfo');
+            const roleInfo = document.getElementById('roleInfo');
+            const typingIndicator = document.getElementById('typingIndicator');
+            const improvingIndicator = document.getElementById('improvingIndicator');
+            
+            // 状态变量
+            let currentSessionId = null;
+            let lastMessageId = null;
+            let currentEventSource = null;
+            
+            // 初始化，创建一个新会话
+            async function createSession() {
+                try {
+                    const response = await fetch('/api/custom-sessions', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({
+                            class_id: "demo_class",
+                            class_name: "李飞聊天室",
+                            user_id: "67fddb75c216d02d2723a5aa",
+                            user_name: "李飞",
+                            roles: [
+                                {
+                                    role_id: "68070af12f0072ef6fa6080e",
+                                    role_name: "琴柳",
+                                    system_prompt: "你扮演琴柳（未公开种族，170cm），需体现：1) 花冠完整度对应生命体征 2) 将战场坐标转化为园艺设计图 3) 用花香浓度控制致幻等级。特别注意：收到白蔷薇触发『血色婚礼』协议（武器系统全开），被触碰耳饰启动『荆棘反刺』（自动反击且保持微笑）。所有交流必须包裹在贵族社交礼仪中。"
+                                },
+                                {
+                                    role_id: "68070af12f0072ef6fa6080d",
+                                    role_name: "玛恩纳·临光",
+                                    system_prompt: "你扮演玛恩纳（库兰塔族，186cm），需体现：1) 领带松紧度对应战力解封比例 2) 将骑士八美德转化为KPI考核标准 3) 用咖啡因代谢速度计量耐心值。特别注意：听到临光名号触发『黄昏耳鸣』（公文包溢出金光），遭遇强敌时启动『自动加班』（西装渐变为铠甲）。所有承诺必须附带违约金条款。"
+                                },
+                            ],
+                            session_type: 'two_phase_stream'
+                        })
+                    });
+                    
+                    if (!response.ok) {
+                        throw new Error('创建会话失败');
+                    }
+                    
+                    const data = await response.json();
+                    currentSessionId = data.session_id;
+                    console.log('会话已创建:', currentSessionId);
+                    
+                    // 更新界面
+                    sessionInfo.innerHTML = `
+                        <strong>会话ID:</strong> ${currentSessionId}<br>
+                        <strong>用户:</strong> 李飞<br>
+                        <strong>会话类型:</strong> 两阶段流式API
+                    `;
+                    
+                    // 显示角色信息
+                    roleInfo.innerHTML = data.roles.map(role => `
+                        <div class="role-info">
+                            <strong>${role.role_name}</strong><br>
+                            ${role.system_prompt.substring(0, 100)}...
+                        </div>
+                    `).join('');
+                    
+                    createSessionBtn.textContent = "已创建会话";
+                    createSessionBtn.disabled = true;
+                    
+                    // 添加欢迎消息
+                    addSystemMessage("会话已创建，请发送消息开始对话！");
+                    
+                } catch (error) {
+                    showError('创建会话失败: ' + error.message);
+                }
+            }
+            
+            // 显示用户消息
+            function addUserMessage(content) {
+                const messageContainer = document.createElement('div');
+                messageContainer.className = 'message-container';
+                
+                const messageElement = document.createElement('div');
+                messageElement.className = 'message user-message';
+                messageElement.textContent = content;
+                
+                messageContainer.appendChild(messageElement);
+                chatContainer.appendChild(messageContainer);
+                chatContainer.scrollTop = chatContainer.scrollHeight;
+            }
+            
+            // 显示AI消息
+            function addAssistantMessage(content, roleRef = null) {
+                const messageContainer = document.createElement('div');
+                messageContainer.className = 'message-container';
+                
+                // 如果有角色信息，添加角色标签
+                if (roleRef) {
+                    const roleLabel = document.createElement('small');
+                    roleLabel.style.marginRight = '10px';
+                    roleLabel.style.color = '#666';
+                    roleLabel.textContent = `${roleRef}: `;
+                    messageContainer.appendChild(roleLabel);
+                }
+                
+                const messageElement = document.createElement('div');
+                messageElement.className = 'message assistant-message';
+                messageElement.textContent = content;
+                
+                messageContainer.appendChild(messageElement);
+                chatContainer.appendChild(messageContainer);
+                chatContainer.scrollTop = chatContainer.scrollHeight;
+                
+                return messageElement;
+            }
+            
+            // 显示系统消息
+            function addSystemMessage(content) {
+                const messageContainer = document.createElement('div');
+                messageContainer.className = 'text-center my-3';
+                
+                const messageElement = document.createElement('span');
+                messageElement.className = 'badge bg-secondary';
+                messageElement.textContent = content;
+                
+                messageContainer.appendChild(messageElement);
+                chatContainer.appendChild(messageContainer);
+                chatContainer.scrollTop = chatContainer.scrollHeight;
+            }
+            
+            // 显示错误
+            function showError(message) {
+                errorMessage.textContent = message;
+                errorContainer.style.display = 'block';
+                setTimeout(() => {
+                    errorContainer.style.display = 'none';
+                }, 5000);
+            }
+            
+            // 发送用户消息
+            async function sendMessage() {
+                const message = userInput.value.trim();
+                if (!message) return;
+                
+                if (!currentSessionId) {
+                    await createSession();
+                }
+                
+                addUserMessage(message);
+                userInput.value = '';
+                
+                // 显示正在输入指示器
+                typingIndicator.style.display = 'inline-block';
+                sendBtn.disabled = true;
+                
+                // 关闭之前的EventSource连接
+                if (currentEventSource) {
+                    currentEventSource.close();
+                    currentEventSource = null;
+                }
+                
+                // 创建消息容器，后续会更新内容
+                const messagePlaceholder = addAssistantMessage("", "AI");
+                
+                // 创建角色信息容器
+                const roleInfoElement = document.createElement('div');
+                roleInfoElement.className = 'role-info';
+                roleInfoElement.style.display = 'none';
+                chatContainer.appendChild(roleInfoElement);
+                
+                try {
+                    // 使用EventSource接收流式响应
+                    const url = `/api/two-phase-stream/generate?session_id=${encodeURIComponent(currentSessionId)}&message=${encodeURIComponent(message)}`;
+                    const eventSource = new EventSource(url);
+                    currentEventSource = eventSource;
+                    
+                    // 存储流式响应的内容
+                    let responseText = '';
+                    
+                    eventSource.onmessage = function(event) {
+                        try {
+                            const data = JSON.parse(event.data);
+                            console.log('接收到事件:', data);
+                            
+                            // 处理匹配信息
+                            if (data.type === 'match_info') {
+                                lastMessageId = data.message_id;
+                                roleInfoElement.style.display = 'block';
+                                roleInfoElement.innerHTML = `
+                                    <strong>选中角色:</strong> ${data.selected_role}<br>
+                                    <strong>匹配分数:</strong> ${(data.match_score * 100).toFixed(1)}%<br>
+                                    <strong>匹配原因:</strong> ${data.match_reason}
+                                `;
+                                messagePlaceholder.parentElement.querySelector('small').textContent = `${data.selected_role}: `;
+                            }
+                            
+                            // 处理内容片段
+                            else if (data.type === 'content') {
+                                responseText += data.content;
+                                messagePlaceholder.textContent = responseText;
+                                chatContainer.scrollTop = chatContainer.scrollHeight;
+                            }
+                            
+                            // 处理完成信号
+                            else if (data.type === 'complete') {
+                                // 关闭连接
+                                eventSource.close();
+                                currentEventSource = null;
+                                
+                                // 显示反馈界面
+                                phase2Container.style.display = 'block';
+                                
+                                // 隐藏正在输入指示器
+                                typingIndicator.style.display = 'none';
+                                sendBtn.disabled = false;
+                            }
+                            
+                            // 处理错误
+                            else if (data.type === 'error') {
+                                showError('生成响应时出错: ' + data.message);
+                                eventSource.close();
+                                currentEventSource = null;
+                                typingIndicator.style.display = 'none';
+                                sendBtn.disabled = false;
+                            }
+                        } catch (e) {
+                            console.error('解析事件数据时出错:', e);
+                        }
+                    };
+                    
+                    eventSource.onerror = function(error) {
+                        console.error('EventSource错误:', error);
+                        eventSource.close();
+                        currentEventSource = null;
+                        typingIndicator.style.display = 'none';
+                        sendBtn.disabled = false;
+                        
+                        if (responseText.length === 0) {
+                            showError('连接中断或请求失败');
+                        }
+                    };
+                    
+                } catch (error) {
+                    showError('发送消息失败: ' + error.message);
+                    typingIndicator.style.display = 'none';
+                    sendBtn.disabled = false;
+                }
+            }
+            
+            // 发送反馈
+            async function sendFeedback(isAccepted) {
+                if (!lastMessageId) return;
+                
+                acceptBtn.disabled = true;
+                rejectBtn.disabled = true;
+                phase2Container.style.display = 'none';
+                
+                // 如果接受，直接显示确认信息并返回
+                if (isAccepted) {
+                    try {
+                        const response = await fetch(`/api/two-phase-stream/feedback?session_id=${encodeURIComponent(currentSessionId)}&message_id=${encodeURIComponent(lastMessageId)}&is_accepted=true`);
+                        
+                        if (!response.ok) {
+                            throw new Error('发送反馈失败');
+                        }
+                        
+                        addSystemMessage("✓ 已接受回复");
+                        acceptBtn.disabled = false;
+                        rejectBtn.disabled = false;
+                        
+                    } catch (error) {
+                        showError('发送反馈失败: ' + error.message);
+                        acceptBtn.disabled = false;
+                        rejectBtn.disabled = false;
+                    }
+                    
+                    return;
+                }
+                
+                // 否则，显示改进中指示器
+                improvingIndicator.style.display = 'block';
+                
+                // 关闭之前的EventSource连接
+                if (currentEventSource) {
+                    currentEventSource.close();
+                    currentEventSource = null;
+                }
+                
+                // 创建改进回复的消息容器
+                addSystemMessage("⚠ 已拒绝回复，生成改进版本");
+                const improvedMessagePlaceholder = addAssistantMessage("", "改进回复");
+                
+                try {
+                    // 使用EventSource接收流式响应
+                    const url = `/api/two-phase-stream/feedback?session_id=${encodeURIComponent(currentSessionId)}&message_id=${encodeURIComponent(lastMessageId)}&is_accepted=false`;
+                    const eventSource = new EventSource(url);
+                    currentEventSource = eventSource;
+                    
+                    // 存储流式响应的内容
+                    let improvedResponseText = '';
+                    
+                    eventSource.onmessage = function(event) {
+                        try {
+                            const data = JSON.parse(event.data);
+                            console.log('接收到改进事件:', data);
+                            
+                            // 处理内容片段
+                            if (data.type === 'content') {
+                                improvedResponseText += data.content;
+                                improvedMessagePlaceholder.textContent = improvedResponseText;
+                                chatContainer.scrollTop = chatContainer.scrollHeight;
+                            }
+                            
+                            // 处理完成信号
+                            else if (data.type === 'complete') {
+                                // 关闭连接
+                                eventSource.close();
+                                currentEventSource = null;
+                                
+                                // 隐藏改进中指示器
+                                improvingIndicator.style.display = 'none';
+                                acceptBtn.disabled = false;
+                                rejectBtn.disabled = false;
+                            }
+                            
+                            // 处理错误
+                            else if (data.type === 'error') {
+                                showError('生成改进响应时出错: ' + data.message);
+                                eventSource.close();
+                                currentEventSource = null;
+                                improvingIndicator.style.display = 'none';
+                                acceptBtn.disabled = false;
+                                rejectBtn.disabled = false;
+                            }
+                        } catch (e) {
+                            console.error('解析改进事件数据时出错:', e);
+                        }
+                    };
+                    
+                    eventSource.onerror = function(error) {
+                        console.error('改进EventSource错误:', error);
+                        eventSource.close();
+                        currentEventSource = null;
+                        improvingIndicator.style.display = 'none';
+                        acceptBtn.disabled = false;
+                        rejectBtn.disabled = false;
+                        
+                        if (improvedResponseText.length === 0) {
+                            showError('改进响应连接中断或请求失败');
+                        }
+                    };
+                    
+                } catch (error) {
+                    showError('发送改进反馈失败: ' + error.message);
+                    improvingIndicator.style.display = 'none';
+                    acceptBtn.disabled = false;
+                    rejectBtn.disabled = false;
+                }
+            }
+            
+            // 清空聊天记录
+            function clearChat() {
+                chatContainer.innerHTML = '';
+                phase2Container.style.display = 'none';
+                lastMessageId = null;
+                
+                // 如果创建了会话，添加重置消息
+                if (currentSessionId) {
+                    addSystemMessage("聊天记录已清空");
+                }
+            }
+            
+            // 事件监听
+            sendBtn.addEventListener('click', sendMessage);
+            
+            userInput.addEventListener('keypress', (e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    sendMessage();
+                }
+            });
+            
+            acceptBtn.addEventListener('click', () => sendFeedback(true));
+            rejectBtn.addEventListener('click', () => sendFeedback(false));
+            createSessionBtn.addEventListener('click', createSession);
+            clearChatBtn.addEventListener('click', clearChat);
+        });
+    </script>
+</body>
+</html> 

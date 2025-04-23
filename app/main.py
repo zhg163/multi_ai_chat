@@ -69,7 +69,7 @@ logger = setup_logging()
 logger.info("日志系统初始化完成")
 
 # 导出logger供其他模块使用
-from app import logger as app_logger
+# from app import logger as app_logger
 app_logger = logger
 
 # 加载环境变量
@@ -203,6 +203,22 @@ try:
     logger.info("自定义会话路由已加载")
 except ImportError as e:
     logger.error(f"无法导入自定义会话路由: {str(e)}")
+
+# 导入两阶段API路由
+try:
+    from app.api.two_phase_routes import router as two_phase_router
+    app.include_router(two_phase_router)
+    logger.info("两阶段API路由已加载")
+except ImportError as e:
+    logger.error(f"无法导入两阶段API路由: {str(e)}")
+
+# 导入两阶段流式API路由
+try:
+    from app.api.two_phase_stream_routes import router as two_phase_stream_router
+    app.include_router(two_phase_stream_router)
+    logger.info("两阶段流式API路由已加载")
+except ImportError as e:
+    logger.error(f"无法导入两阶段流式API路由: {str(e)}")
 
 # 导入会话角色路由
 try:
@@ -505,8 +521,15 @@ async def startup_event():
 
 @app.get("/", response_class=HTMLResponse)
 async def root():
-    """重定向到演示页面"""
-    return RedirectResponse(url="/static/stream_example.html")
+    """主页"""
+    try:
+        html_file = os.path.join(static_dir, "index.html")
+        with open(html_file, "r", encoding="utf-8") as f:
+            html_content = f.read()
+        return HTMLResponse(content=html_content)
+    except Exception as e:
+        logger.error(f"无法加载主页: {str(e)}")
+        return HTMLResponse(content="<h1>欢迎使用多AI聊天系统</h1><p>主页加载失败，请查看日志获取详细信息。</p>")
 
 @app.get("/health")
 async def health_check():
@@ -600,19 +623,33 @@ async def session_creator():
         logger.error(f"读取会话创建页面失败: {str(e)}")
         return HTMLResponse(content="<h1>加载会话创建页面失败</h1>")
 
-# 添加两阶段API演示页面路由
+# 两阶段聊天页面
 @app.get("/two-phase-chat", response_class=HTMLResponse)
 async def two_phase_chat():
-    """两阶段API演示页面"""
+    """两阶段聊天页面"""
     try:
-        with open(os.path.join(current_dir, "static", "two-phase-chat.html"), "r", encoding="utf-8") as f:
+        html_file = os.path.join(static_dir, "two-phase-chat.html")
+        with open(html_file, "r", encoding="utf-8") as f:
             html_content = f.read()
         return HTMLResponse(content=html_content)
     except Exception as e:
-        logger.error(f"读取两阶段API演示页面失败: {str(e)}")
-        return HTMLResponse(content="<h1>加载两阶段API演示页面失败</h1>")
+        logger.error(f"无法加载两阶段聊天页面: {str(e)}")
+        raise HTTPException(status_code=500, detail="无法加载聊天页面")
 
-# 添加星图页面路由
+# 两阶段流式聊天页面
+@app.get("/two-phase-stream-chat", response_class=HTMLResponse)
+async def two_phase_stream_chat():
+    """两阶段流式聊天页面"""
+    try:
+        html_file = os.path.join(static_dir, "two-phase-stream-chat.html")
+        with open(html_file, "r", encoding="utf-8") as f:
+            html_content = f.read()
+        return HTMLResponse(content=html_content)
+    except Exception as e:
+        logger.error(f"无法加载两阶段流式聊天页面: {str(e)}")
+        raise HTTPException(status_code=500, detail="无法加载聊天页面")
+
+# 星图页面
 @app.get("/star-map", response_class=HTMLResponse)
 async def star_map():
     """星图页面"""

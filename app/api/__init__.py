@@ -42,6 +42,8 @@ try:
 except ImportError:
     role_router = None
 
+# 不再导入内存路由模块，功能已整合至其他路由
+
 router = APIRouter()
 
 # 注册所有路由
@@ -65,6 +67,10 @@ if session_router:
 
 if role_router:
     router.include_router(role_router)
+    # 确保角色匹配API可用
+    print("角色管理路由已注册，包含角色匹配API")
+
+# 不再注册内存路由，功能已整合至其他路由
 
 # 导出所有路由
 __all__ = ["router"] 

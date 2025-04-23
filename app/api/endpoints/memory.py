@@ -290,3 +290,44 @@ async def select_session_user(
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"选择用户名失败: {str(e)}") 
+
+@router.get("/session/{session_id}/messages")
+async def get_session_messages(
+    session_id: str,
+    current_user: Dict = Depends(get_current_user_optional)
+):
+    """
+    获取会话消息列表
+    
+    Args:
+        session_id: 会话ID
+        
+    Returns:
+        会话消息列表
+    """
+    try:
+        user_id = current_user.get("id", "anonymous_user")
+        memory_manager = await get_memory_manager()
+        
+        # 获取会话消息
+        messages = await memory_manager.short_term_memory.get_session_messages(session_id, user_id)
+        
+        if messages is None:
+            messages = []
+            
+        # 转换消息格式
+        formatted_messages = []
+        for msg in messages:
+            formatted_messages.append({
+                "role": msg.get("role"),
+                "content": msg.get("content"),
+                "timestamp": msg.get("timestamp"),
+                "sender": msg.get("sender"),
+                "user_name": msg.get("user_name"),
+                "assistant_name": msg.get("assistant_name")
+            })
+            
+        return {"success": True, "messages": formatted_messages}
+    except Exception as e:
+        logger.error(f"获取会话消息失败: {str(e)}", exc_info=True)
+        return {"success": False, "error": f"获取会话消息失败: {str(e)}", "messages": []} 

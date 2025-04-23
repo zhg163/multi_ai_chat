@@ -1152,9 +1152,9 @@ class LLMService:
                         if response.status != 200:
                             error_text = await response.text()
                             logger.error(f"API请求失败: {response.status} - {error_text}")
-                            return {
-                                "choices": [
-                                    {
+        return {
+            "choices": [
+                {
                                         "message": {"content": f"API请求失败: {error_text}"},
                                         "finish_reason": "error"
                                     }
@@ -1182,6 +1182,7 @@ class LLMService:
                             "model": model,
                             "provider": provider
                         }
+            
             except Exception as e:
                 logger.error(f"API请求失败: {str(e)}")
                 return {
@@ -1193,7 +1194,7 @@ class LLMService:
                     ],
                     "error": str(e)
                 }
-                
+            
         except Exception as e:
             logger.error(f"chat_completion执行失败: {str(e)}")
             return {
@@ -1204,7 +1205,7 @@ class LLMService:
                     }
                 ],
                 "error": str(e)
-            }
+        }
     
     async def chat_completion_stream(self, **kwargs):
         """

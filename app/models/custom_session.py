@@ -137,10 +137,10 @@ class CustomSession:
                     # 同步到Redis - 修复属性名称
                     if memory_manager and memory_manager.short_term_memory and memory_manager.short_term_memory.redis:
                         redis_client = memory_manager.short_term_memory.redis
-                        
+                
                         # 使用新标准格式的会话键 - 不包含user_id
                         redis_session_key = f"session:{session_id}"
-                        
+                
                         # 准备会话数据 - 与MongoDB存储完全相同的格式
                         redis_data = {
                             "id": session_id,
@@ -155,7 +155,7 @@ class CustomSession:
                             "created_at": now.timestamp(),
                             "updated_at": now.timestamp()
                         }
-                        
+                
                         # 处理角色信息 - 使用MongoDB存储一致的格式
                         roles = session_data["roles"]
                         logger.info(f"同步到Redis前的角色数据: {roles}")
@@ -208,18 +208,18 @@ class CustomSession:
                         
                         redis_data["roles"] = json.dumps(roles)
                         logger.info(f"序列化后的角色数据: {redis_data['roles'][:100]}...")
-                        
+                
                         # 向Redis写入数据
                         await redis_client.hmset(redis_session_key, redis_data)
-                        
+                
                         # 设置过期时间，例如7天
                         await redis_client.expire(redis_session_key, 7 * 24 * 60 * 60)
-                        
+                
                         logger.info(f"会话已同步到Redis: {session_id}, 键: {redis_session_key}")
-                        
+                
                         # 创建会话消息列表键
                         message_key = f"messages:{user_id}:{session_id}"
-                        
+                
                         # 预创建空消息列表
                         if not await redis_client.exists(message_key):
                             # 添加一个系统消息作为初始消息
@@ -387,17 +387,9 @@ class CustomSession:
                             # 如果不是最后一次尝试，等待后重试
                             if attempt < max_retries - 1:
                                 await asyncio.sleep(retry_delay * (2 ** attempt))  # 指数退避策略
-                            else:
-                                logger.error(f"同步会话状态到Redis重试{max_retries}次后失败: {str(retry_error)}")
-                                # 记录详细错误，但允许继续
                 else:
-                    # 记录更详细的信息，帮助诊断问题
-                    logger_detail = {
-                        "memory_manager_exists": memory_manager is not None,
-                        "short_term_memory_exists": hasattr(memory_manager, 'short_term_memory') if memory_manager else False,
-                        "redis_exists": hasattr(memory_manager.short_term_memory, 'redis') if memory_manager and hasattr(memory_manager, 'short_term_memory') else False
-                    }
-                    logger.warning(f"无法获取内存管理器或Redis客户端，会话状态未同步到Redis: {session_id}, 详情: {logger_detail}")
+                    logger.error(f"同步会话状态到Redis重试{max_retries}次后失败: {str(retry_error)}")
+                    # 记录详细错误，但允许继续
             except Exception as e:
                 logger.error(f"同步会话状态到Redis失败: {str(e)}")
                 # 不中断流程，继续返回MongoDB更新状态
@@ -442,13 +434,13 @@ class CustomSession:
             
             if memory_manager and memory_manager.short_term_memory and memory_manager.short_term_memory.redis:
                 redis_client = memory_manager.short_term_memory.redis
-                
+            
                 # 如果未提供user_id，尝试从MongoDB获取
                 if not user_id:
                     logger.info(f"用户ID未提供，尝试从MongoDB获取: {session_id}")
                     collection = await cls.get_collection()
                     session_data = await collection.find_one({"session_id": session_id})
-                    
+            
                     if session_data and "user_id" in session_data:
                         user_id = session_data.get("user_id")
                         logger.info(f"成功从MongoDB获取用户ID: {user_id}")
@@ -482,7 +474,7 @@ class CustomSession:
             else:
                 logger.error("无法获取Redis客户端")
                 return False
-                
+            
         except Exception as e:
             logger.error(f"从Redis删除会话失败: {str(e)}")
             return False
@@ -555,7 +547,7 @@ class CustomSession:
                 # 1. 从MongoDB获取会话数据
                 collection = await cls.get_collection()
                 session_data = await collection.find_one({"session_id": session_id})
-                
+            
                 if not session_data:
                     logger.warning(f"找不到会话: {session_id}")
                     return False
@@ -581,11 +573,11 @@ class CustomSession:
                 # 3. 同步到Redis
                 if memory_manager and memory_manager.short_term_memory and memory_manager.short_term_memory.redis:
                     redis_client = memory_manager.short_term_memory.redis
-                    
+            
                     # 使用新的标准格式的会话键 (不包含user_id)
                     redis_session_key = f"session:{session_id}"
                     logger.info(f"使用的Redis会话键: {redis_session_key}")
-                    
+            
                     # 准备会话数据 - 与MongoDB存储完全相同的格式
                     redis_data = {
                         "id": session_id,
@@ -600,26 +592,26 @@ class CustomSession:
                         "created_at": session_data.get("created_at", datetime.utcnow()).timestamp(),
                         "updated_at": session_data.get("updated_at", datetime.utcnow()).timestamp()
                     }
-                    
+            
                     # 处理角色信息
                     roles = session_data.get("roles", [])
                     logger.info(f"角色数据: {roles}")
                     
                     # 将角色数据转换为字符串
                     redis_data["roles"] = json.dumps(roles)
-                    
+            
                     # 向Redis写入数据
                     await redis_client.hmset(redis_session_key, redis_data)
-                    
+            
                     # 设置过期时间，例如7天
                     await redis_client.expire(redis_session_key, 7 * 24 * 60 * 60)
-                    
+                
                     logger.info(f"会话 {session_id} 已成功同步到Redis")
                     return True
                 else:
                     logger.error(f"内存管理器或Redis客户端不可用")
                     return False
-                    
+            
             except Exception as e:
                 if attempt < max_retries - 1:
                     logger.warning(f"同步到Redis失败，尝试重试 ({attempt+1}/{max_retries}): {str(e)}")
@@ -669,16 +661,16 @@ class CustomSession:
                 try:
                     # 从Redis获取会话数据
                     redis_data = await redis_client.hgetall(redis_session_key)
-                    
+            
                     if not redis_data:
                         logger.warning(f"Redis中不存在会话: {session_id}")
-                        return False
-                        
+                    return False
+                
                     # 获取成功，跳出循环
                     break
                 except Exception as retry_error:
                     logger.warning(f"从Redis获取会话数据尝试 {attempt+1}/{max_retries} 失败: {str(retry_error)}")
-                    
+            
                     # 如果不是最后一次尝试，等待后重试
                     if attempt < max_retries - 1:
                         await asyncio.sleep(retry_delay * (2 ** attempt))  # 指数退避策略
@@ -778,7 +770,7 @@ class CustomSession:
                 else:
                     logger.error(f"创建MongoDB会话失败: {session_id}")
                     return False
-                    
+            
         except Exception as e:
             logger.error(f"将会话从Redis同步到MongoDB失败: {str(e)}")
             return False
@@ -1020,7 +1012,7 @@ class CustomSession:
                     
                     # 获取旧键数据
                     old_data = await redis_client.hgetall(key)
-                    
+                        
                     if not old_data:
                         results["skipped"] += 1
                         continue
@@ -1062,7 +1054,7 @@ class CustomSession:
                 try:
                     # 处理角色数据格式
                     await cls._migrate_roles_for_key(key, redis_client, results)
-                    
+        
                 except Exception as e:
                     logger.error(f"处理标准格式键 {key} 失败: {str(e)}")
                     results["errors"] += 1

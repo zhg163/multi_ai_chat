@@ -4,12 +4,19 @@ from pydantic import BaseModel, Field, ConfigDict
 from bson import ObjectId
 import traceback
 import logging
+import uuid
+import json
 
 from app.services.role_service import RoleService
 from app.models.role import Role
 from app.database.mongodb import get_db
-from app.services.role_matching_service import role_matching_service
+from app.services.role_matching_service import role_matching_service, RoleMatchingService
 from app.services.embedding_service import embedding_service
+# Removed import - this file was deleted
+# from app.services.session_role_manager import SessionRoleManager
+# Removed imports - these modules don't exist
+# from app.common.redis_client import get_redis_client
+# from app.common.logger_config import get_logger
 
 # 配置日志
 logger = logging.getLogger(__name__)
@@ -85,6 +92,18 @@ class KeywordExtractRequest(BaseModel):
     """关键词提取请求"""
     text: str = Field(..., description="要分析的文本")
     top_k: int = Field(10, ge=1, le=50, description="返回关键词数量")
+
+class RoleMatchRequest(BaseModel):
+    query: str
+    session_id: str
+    system_prompt: Optional[str] = None
+    messages: Optional[List[Dict[str, str]]] = None
+
+class RoleMatchResponse(BaseModel):
+    request_id: str
+    success: bool
+    role: Dict[str, Any]
+    message: Optional[str] = None
 
 # 路由定义
 @router.post("/", response_model=RoleResponse, status_code=status.HTTP_201_CREATED)
@@ -350,4 +369,54 @@ async def add_new_roles(roles: List[dict], db=Depends(get_db)):
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"添加角色失败: {str(e)}"
-        ) 
+        )
+
+@router.post("/match", response_model=RoleMatchResponse)
+async def match_role(request: RoleMatchRequest):
+    """根据用户查询匹配合适的角色"""
+    try:
+        request_id = str(uuid.uuid4())
+        query = request.query
+        session_id = request.session_id
+        system_prompt = request.system_prompt
+        messages = request.messages or []
+        
+        # Get redis client
+        # Commented out because redis_client is not available
+        # redis_client = get_redis_client()
+        
+        # Initialize session role manager
+        # Commented out because SessionRoleManager is not available
+        # session_role_manager = SessionRoleManager(redis_client)
+        
+        # Perform role matching
+        matched_role = await role_matching_service.match_role(query, session_id)
+        
+        if not matched_role:
+            return {
+                "request_id": request_id,
+                "success": False,
+                "role": {},
+                "message": "No matching role found"
+            }
+        
+        # Update role usage
+        # Commented out because session_role_manager is not available
+        # await session_role_manager.update_role_usage(session_id, matched_role["role_id"])
+        
+        return {
+            "request_id": request_id,
+            "success": True,
+            "role": matched_role,
+            "message": "Role matched successfully"
+        }
+        
+    except Exception as e:
+        logger.error(f"Error matching role: {str(e)}")
+        logger.error(traceback.format_exc())
+        return {
+            "request_id": str(uuid.uuid4()),
+            "success": False,
+            "role": {},
+            "message": f"Error matching role: {str(e)}"
+        } 

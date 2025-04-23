@@ -327,14 +327,14 @@ async def get_database(db_name: Optional[str] = None) -> Optional[AsyncIOMotorDa
         
         # 检查是否有足够的权限
         try:
-            # 尝试列出collection以验证权限
-            collections = await db.list_collection_names(limit=1)
+            # 尝试列出collection以验证权限 - 移除limit参数以兼容旧版本MongoDB
+            collections = await db.list_collection_names()
             logger.info(f"成功获取{db_name}数据库的集合列表: {collections[:5] if collections else '无集合'}")
         except OperationFailure as e:
             if "not authorized" in str(e):
                 logger.warning(f"已连接到{db_name}数据库，但权限受限: {str(e)}")
             else:
-                logger.warning(f"列出集合时出现问题: {str(e)}")
+                logger.warning(f"列出集合时出现问题: {str(e)}, full error: {e.details}")
         
         _mongo_db = db
         logger.info(f"已连接到MongoDB数据库: {db_name}")
@@ -382,3 +382,14 @@ async def ping_database() -> Dict[str, Any]:
     except Exception as e:
         result["message"] = f"MongoDB连接检查失败: {str(e)}"
         return result 
+
+async def get_client() -> AsyncIOMotorClient:
+    """
+    获取MongoDB客户端连接
+    
+    简单封装get_mongo_client函数，确保兼容性
+    
+    Returns:
+        AsyncIOMotorClient: MongoDB连接客户端
+    """
+    return await get_mongo_client() 

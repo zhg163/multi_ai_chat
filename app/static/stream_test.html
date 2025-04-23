@@ -1,0 +1,461 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>流式API测试页面</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            line-height: 1.6;
+        }
+        .container {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+        .test-section {
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            padding: 20px;
+            background-color: #f9f9f9;
+        }
+        h1, h2, h3 {
+            color: #333;
+        }
+        button {
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            padding: 10px 15px;
+            text-align: center;
+            font-size: 16px;
+            margin: 10px 0;
+            cursor: pointer;
+            border-radius: 4px;
+        }
+        button:hover {
+            background-color: #45a049;
+        }
+        button:disabled {
+            background-color: #cccccc;
+            cursor: not-allowed;
+        }
+        .response-box {
+            background-color: #fff;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            padding: 15px;
+            min-height: 150px;
+            max-height: 400px;
+            overflow-y: auto;
+            white-space: pre-wrap;
+            font-family: monospace;
+        }
+        .logs {
+            background-color: #f5f5f5;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            padding: 10px;
+            font-size: 14px;
+            font-family: monospace;
+            margin-top: 10px;
+            max-height: 200px;
+            overflow-y: auto;
+        }
+        .error {
+            color: #d32f2f;
+            font-weight: bold;
+        }
+        .success {
+            color: #388e3c;
+            font-weight: bold;
+        }
+        .info {
+            color: #0288d1;
+        }
+    </style>
+</head>
+<body>
+    <h1>流式API测试页面</h1>
+    <p>此页面用于测试不同方式的流式API调用，帮助调试和验证API流式响应功能。</p>
+    
+    <div class="container">
+        <!-- EventSource API 测试 -->
+        <div class="test-section">
+            <h2>EventSource API 测试</h2>
+            <p>使用 EventSource API (SSE) 接收流式数据</p>
+            
+            <button id="startEventSource">开始 EventSource 测试</button>
+            <button id="stopEventSource" disabled>停止</button>
+            
+            <h3>响应内容:</h3>
+            <div id="eventSourceResponse" class="response-box"></div>
+            
+            <h3>日志:</h3>
+            <div id="eventSourceLogs" class="logs"></div>
+        </div>
+        
+        <!-- Fetch API with getReader() 测试 -->
+        <div class="test-section">
+            <h2>Fetch API with getReader() 测试</h2>
+            <p>使用 fetch API 和 ReadableStream.getReader() 接收流式数据</p>
+            
+            <button id="startFetchReader">开始 Fetch Reader 测试</button>
+            <button id="stopFetchReader" disabled>停止</button>
+            
+            <h3>响应内容:</h3>
+            <div id="fetchReaderResponse" class="response-box"></div>
+            
+            <h3>日志:</h3>
+            <div id="fetchReaderLogs" class="logs"></div>
+        </div>
+    </div>
+    
+    <script>
+        // 全局变量
+        let eventSource = null;
+        let currentMessageId = null;
+        let readController = null;
+        
+        // 用于记录日志的函数
+        function logMessage(element, message, type = 'info') {
+            const logEntry = document.createElement('div');
+            logEntry.classList.add(type);
+            logEntry.textContent = `[${new Date().toLocaleTimeString()}] ${message}`;
+            element.appendChild(logEntry);
+            element.scrollTop = element.scrollHeight;
+        }
+        
+        // 清除响应框内容
+        function clearResponse(element) {
+            element.textContent = '';
+        }
+        
+        // 添加响应内容
+        function appendResponse(element, content) {
+            element.textContent += content;
+            element.scrollTop = element.scrollHeight;
+        }
+        
+        // EventSource 测试
+        document.getElementById('startEventSource').addEventListener('click', function() {
+            const responseElement = document.getElementById('eventSourceResponse');
+            const logsElement = document.getElementById('eventSourceLogs');
+            
+            clearResponse(responseElement);
+            logMessage(logsElement, 'Starting EventSource test...', 'info');
+            
+            this.disabled = true;
+            document.getElementById('stopEventSource').disabled = false;
+            
+            try {
+                // 构造测试请求
+                const requestData = {
+                    messages: [
+                        {role: "system", content: "你是一个有用的AI助手，请提供简洁明了的回答。"},
+                        {role: "user", content: "请解释量子计算的基本原理，并用简单的比喻来说明。"}
+                    ],
+                    stream: true
+                };
+                
+                // 创建 URL 并添加查询参数
+                const url = '/api/llm/chatrag';
+                
+                // 初始化 EventSource
+                eventSource = new EventSource(`/api/llm/chatrag?dummy=${Date.now()}`);
+                
+                // 发送 POST 请求
+                fetch(url, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(requestData)
+                }).then(response => {
+                    logMessage(logsElement, `POST request sent, status: ${response.status}`, response.ok ? 'success' : 'error');
+                }).catch(error => {
+                    logMessage(logsElement, `POST request failed: ${error.message}`, 'error');
+                });
+                
+                // 设置 EventSource 事件处理程序
+                eventSource.onopen = function() {
+                    logMessage(logsElement, 'EventSource connection opened', 'success');
+                };
+                
+                eventSource.onerror = function(event) {
+                    logMessage(logsElement, 'EventSource error', 'error');
+                    console.error('EventSource error:', event);
+                    eventSource.close();
+                    document.getElementById('startEventSource').disabled = false;
+                    document.getElementById('stopEventSource').disabled = true;
+                };
+                
+                eventSource.onmessage = function(event) {
+                    try {
+                        logMessage(logsElement, `Received data: ${event.data.substring(0, 50)}...`, 'info');
+                        
+                        // 检查是否为 [DONE] 标记
+                        if (event.data === '[DONE]') {
+                            logMessage(logsElement, 'Stream completed', 'success');
+                            eventSource.close();
+                            document.getElementById('startEventSource').disabled = false;
+                            document.getElementById('stopEventSource').disabled = true;
+                            return;
+                        }
+                        
+                        const data = JSON.parse(event.data);
+                        
+                        // 保存消息ID（用于停止生成）
+                        if (data.message_id) {
+                            currentMessageId = data.message_id;
+                            logMessage(logsElement, `Received message ID: ${currentMessageId}`, 'info');
+                            return;
+                        }
+                        
+                        // 处理角色匹配数据
+                        if (data.role_match) {
+                            logMessage(logsElement, `Role match data: ${JSON.stringify(data.role_match)}`, 'info');
+                            return;
+                        }
+                        
+                        // 处理错误
+                        if (data.error) {
+                            logMessage(logsElement, `Error: ${data.error}`, 'error');
+                            return;
+                        }
+                        
+                        // 处理响应内容
+                        if (data.choices && data.choices[0]) {
+                            if (data.choices[0].delta && data.choices[0].delta.content) {
+                                appendResponse(responseElement, data.choices[0].delta.content);
+                            } else if (data.choices[0].message && data.choices[0].message.content) {
+                                appendResponse(responseElement, data.choices[0].message.content);
+                            } else if (data.choices[0].finish_reason) {
+                                logMessage(logsElement, `Completion reason: ${data.choices[0].finish_reason}`, 'success');
+                            }
+                        }
+                    } catch (e) {
+                        logMessage(logsElement, `Error parsing response: ${e.message}`, 'error');
+                        console.error('Error parsing response:', e, event.data);
+                    }
+                };
+            } catch (e) {
+                logMessage(logsElement, `Error setting up EventSource: ${e.message}`, 'error');
+                document.getElementById('startEventSource').disabled = false;
+                document.getElementById('stopEventSource').disabled = true;
+            }
+        });
+        
+        document.getElementById('stopEventSource').addEventListener('click', function() {
+            const logsElement = document.getElementById('eventSourceLogs');
+            
+            if (eventSource) {
+                logMessage(logsElement, 'Closing EventSource connection...', 'info');
+                eventSource.close();
+                eventSource = null;
+            }
+            
+            if (currentMessageId) {
+                logMessage(logsElement, `Sending stop request for message ID: ${currentMessageId}`, 'info');
+                
+                fetch('/api/llm/chatrag/stop', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ message_id: currentMessageId })
+                }).then(response => {
+                    logMessage(logsElement, `Stop request sent, status: ${response.status}`, response.ok ? 'success' : 'error');
+                }).catch(error => {
+                    logMessage(logsElement, `Stop request failed: ${error.message}`, 'error');
+                });
+            }
+            
+            this.disabled = true;
+            document.getElementById('startEventSource').disabled = false;
+        });
+        
+        // Fetch API with getReader() 测试
+        document.getElementById('startFetchReader').addEventListener('click', function() {
+            const responseElement = document.getElementById('fetchReaderResponse');
+            const logsElement = document.getElementById('fetchReaderLogs');
+            
+            clearResponse(responseElement);
+            logMessage(logsElement, 'Starting Fetch Reader test...', 'info');
+            
+            this.disabled = true;
+            document.getElementById('stopFetchReader').disabled = false;
+            
+            async function fetchWithReader() {
+                try {
+                    // 构造测试请求
+                    const requestData = {
+                        messages: [
+                            {role: "system", content: "你是一个有用的AI助手，请提供简洁明了的回答。"},
+                            {role: "user", content: "解释什么是神经网络，用简单的比喻。"}
+                        ],
+                        stream: true
+                    };
+                    
+                    // 发送请求
+                    const response = await fetch('/api/llm/chatrag', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'Accept': 'text/event-stream'
+                        },
+                        body: JSON.stringify(requestData)
+                    });
+                    
+                    logMessage(logsElement, `Fetch request sent, status: ${response.status}`, response.ok ? 'success' : 'error');
+                    
+                    if (!response.ok) {
+                        const errorText = await response.text();
+                        throw new Error(`API error: ${response.status} - ${errorText}`);
+                    }
+                    
+                    // 获取读取器
+                    const reader = response.body.getReader();
+                    readController = reader;
+                    
+                    // 创建解码器
+                    const decoder = new TextDecoder();
+                    
+                    // 读取响应流
+                    let receivedText = '';
+                    let messageId = null;
+                    
+                    try {
+                        while (true) {
+                            const { done, value } = await reader.read();
+                            
+                            if (done) {
+                                logMessage(logsElement, 'Stream completed', 'success');
+                                break;
+                            }
+                            
+                            // 解码二进制数据
+                            const chunk = decoder.decode(value, { stream: true });
+                            logMessage(logsElement, `Received chunk: ${chunk.length} bytes`, 'info');
+                            
+                            // 处理SSE格式的数据行
+                            const lines = chunk.split('\n');
+                            for (const line of lines) {
+                                if (!line.trim() || line.trim().startsWith(':')) continue;
+                                
+                                if (line.startsWith('data: ')) {
+                                    const data = line.substring(6).trim();
+                                    
+                                    // 检查是否为 [DONE] 标记
+                                    if (data === '[DONE]') {
+                                        logMessage(logsElement, 'Received [DONE] marker', 'success');
+                                        continue;
+                                    }
+                                    
+                                    try {
+                                        const parsed = JSON.parse(data);
+                                        
+                                        // 保存消息ID
+                                        if (parsed.message_id) {
+                                            messageId = parsed.message_id;
+                                            currentMessageId = messageId;
+                                            logMessage(logsElement, `Received message ID: ${messageId}`, 'info');
+                                            continue;
+                                        }
+                                        
+                                        // 处理角色匹配数据
+                                        if (parsed.role_match) {
+                                            logMessage(logsElement, `Role match data: ${JSON.stringify(parsed.role_match)}`, 'info');
+                                            continue;
+                                        }
+                                        
+                                        // 处理错误
+                                        if (parsed.error) {
+                                            logMessage(logsElement, `Error: ${parsed.error}`, 'error');
+                                            continue;
+                                        }
+                                        
+                                        // 处理响应内容
+                                        if (parsed.choices && parsed.choices[0]) {
+                                            if (parsed.choices[0].delta && parsed.choices[0].delta.content) {
+                                                const content = parsed.choices[0].delta.content;
+                                                receivedText += content;
+                                                appendResponse(responseElement, content);
+                                            } else if (parsed.choices[0].message && parsed.choices[0].message.content) {
+                                                const content = parsed.choices[0].message.content;
+                                                receivedText = content; // 覆盖而不是追加
+                                                responseElement.textContent = content;
+                                            } else if (parsed.choices[0].finish_reason) {
+                                                logMessage(logsElement, `Completion reason: ${parsed.choices[0].finish_reason}`, 'success');
+                                            }
+                                        }
+                                    } catch (e) {
+                                        logMessage(logsElement, `Error parsing response: ${e.message}`, 'error');
+                                        console.error('Error parsing response:', e, data);
+                                    }
+                                }
+                            }
+                        }
+                    } catch (readError) {
+                        if (readError.name === 'AbortError') {
+                            logMessage(logsElement, 'Reader aborted by user', 'info');
+                        } else {
+                            logMessage(logsElement, `Error reading stream: ${readError.message}`, 'error');
+                            throw readError;
+                        }
+                    }
+                } catch (error) {
+                    logMessage(logsElement, `Error in fetch: ${error.message}`, 'error');
+                    console.error('Fetch error:', error);
+                } finally {
+                    document.getElementById('startFetchReader').disabled = false;
+                    document.getElementById('stopFetchReader').disabled = true;
+                    readController = null;
+                }
+            }
+            
+            fetchWithReader();
+        });
+        
+        document.getElementById('stopFetchReader').addEventListener('click', function() {
+            const logsElement = document.getElementById('fetchReaderLogs');
+            
+            if (readController) {
+                logMessage(logsElement, 'Aborting reader...', 'info');
+                
+                try {
+                    readController.cancel();
+                    logMessage(logsElement, 'Reader aborted successfully', 'success');
+                } catch (e) {
+                    logMessage(logsElement, `Error aborting reader: ${e.message}`, 'error');
+                }
+                
+                readController = null;
+            }
+            
+            if (currentMessageId) {
+                logMessage(logsElement, `Sending stop request for message ID: ${currentMessageId}`, 'info');
+                
+                fetch('/api/llm/chatrag/stop', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ message_id: currentMessageId })
+                }).then(response => {
+                    logMessage(logsElement, `Stop request sent, status: ${response.status}`, response.ok ? 'success' : 'error');
+                }).catch(error => {
+                    logMessage(logsElement, `Stop request failed: ${error.message}`, 'error');
+                });
+            }
+            
+            this.disabled = true;
+            document.getElementById('startFetchReader').disabled = false;
+        });
+    </script>
+</body>
+</html> 

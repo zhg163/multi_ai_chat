@@ -5,11 +5,14 @@ from pydantic import BaseModel, Field, validator
 from datetime import datetime
 import logging
 import json
+from motor.motor_asyncio import AsyncIOMotorDatabase
 
 from ..services.custom_session_service import CustomSessionService
 from ..auth.auth_bearer import JWTBearer
 from ..auth.auth_handler import get_current_user, get_current_user_or_none
 from ..models.user import User
+from ..database.database import get_database
+from ..services.session_service import SessionService
 
 # 创建logger
 logger = logging.getLogger(__name__)
@@ -522,4 +525,43 @@ async def end_and_archive_session(
         }
     except Exception as e:
         logger.error(f"结束会话失败: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"结束会话失败: {str(e)}") 
+        raise HTTPException(status_code=500, detail=f"结束会话失败: {str(e)}")
+
+@router.get("/{session_id}/anonymous")
+async def get_session_anonymous(
+    session_id: str = Path(..., description="Session ID to get"),
+    db: AsyncIOMotorDatabase = Depends(get_database)
+):
+    """
+    获取会话信息（匿名访问）
+    """
+    try:
+        session_service = SessionService(db)
+        
+        # 尝试获取会话
+        session = await session_service.get_session_by_id(session_id, "anonymous_user")
+        
+        if not session:
+            # 如果找不到会话但不想返回404，可以返回空结果
+            return {"success": True, "session": None, "exists": False}
+        
+        # 格式化会话数据
+        return {
+            "success": True,
+            "exists": True,
+            "session": {
+                "id": str(session["_id"]),
+                "title": session.get("title", "未命名会话"),
+                "created_at": session.get("created_at", datetime.now()),
+                "updated_at": session.get("updated_at", datetime.now()),
+                "status": session.get("status", "active"),
+                "message_count": session.get("message_count", 0)
+            }
+        }
+        
+    except Exception as e:
+        logger.error(f"获取会话失败: {str(e)}")
+        return {
+            "success": False,
+            "error": f"获取会话失败: {str(e)}"
+        } 

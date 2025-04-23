@@ -3,6 +3,7 @@
 """
 
 import numpy as np
+import random
 from typing import List, Dict, Any, Optional, Tuple
 import logging
 import jieba
@@ -46,14 +47,61 @@ class RoleMatchingService:
             匹配角色列表，每项包含角色信息和匹配分数
         """
         try:
-            # 获取数据库连接
+            roles = []
+            session_roles = []  # 存储从Redis获取的原始角色列表
+            
+            # 如果提供了会话ID，从Redis获取该会话的角色集合
+            if session_id:
+                logger.info(f"正在根据会话ID从Redis获取角色集合: {session_id}")
+                # 获取Redis客户端
+                from app.services.redis_service import redis_service
+                import json
+                
+                redis_client = await redis_service.get_redis()
+                if not redis_client:
+                    logger.error("无法获取Redis客户端")
+                    return []
+                
+                # 获取会话数据
+                session_key = f"session:{session_id}"
+                session_data = await redis_client.hgetall(session_key)
+                
+                if not session_data:
+                    logger.warning(f"找不到会话数据: {session_id}")
+                    return []
+                
+                # 解析角色数据
+                roles_data = session_data.get("roles", "[]")
+                
+                try:
+                    session_roles = json.loads(roles_data)  # 保存原始角色列表，用于可能的随机选择
+                    if not isinstance(session_roles, list):
+                        logger.warning(f"会话角色数据格式不正确: {type(session_roles)}")
+                        return []
+                    
+                    roles = session_roles  # 设置待处理角色列表
+                    logger.info(f"从Redis获取到 {len(roles)} 个角色")
+                    # 添加日志，记录每个角色的信息
+                    for i, role in enumerate(roles):
+                        logger.info(f"角色 {i+1}:")
+                        logger.info(f"  - role_id: {role.get('role_id', 'N/A')}")
+                        logger.info(f"  - role_name: {role.get('role_name', 'N/A')}")
+                        logger.info(f"  - keywords: {role.get('keywords', 'N/A')}")
+                    
+                except json.JSONDecodeError:
+                    logger.error(f"角色数据解析失败: {roles_data[:100]}...")
+                    return []
+            else:
+                # 如果没有提供会话ID，则从MongoDB获取所有活跃角色
+                logger.info("未提供会话ID，从MongoDB获取所有活跃角色")
             from app.database.mongodb import get_db
             db = await get_db()
             
-            # 1. 获取所有活跃角色
+                # 获取所有活跃角色
             roles = await db.roles.find({"is_active": True}).to_list(None)
+                
             if not roles:
-                logger.warning("没有找到活跃角色")
+                logger.warning("没有找到可用角色")
                 return []
                 
             # 2. 对消息进行预处理
@@ -69,6 +117,10 @@ class RoleMatchingService:
             results = []
             
             for role in roles:
+                # 根据角色数据来源调整字段名称
+                role_id = str(role.get("_id", role.get("role_id", "")))
+                role_name = role.get("name", role.get("role_name", "未知角色"))
+                
                 # 获取角色向量
                 role_embedding = await embedding_service.get_role_embedding(role)
                 
@@ -108,8 +160,8 @@ class RoleMatchingService:
                         match_reason = "基于历史对话上下文匹配"
                     
                     results.append({
-                        "role_id": str(role["_id"]),
-                        "role_name": role["name"],
+                        "role_id": role_id,
+                        "role_name": role_name,
                         "score": round(float(final_score), 3),
                         "match_reason": match_reason,
                         "details": {
@@ -119,7 +171,28 @@ class RoleMatchingService:
                         }
                     })
             
-            # 5. 按分数排序并限制返回数量
+            # 5. 如果没有匹配到任何角色，且提供了会话ID，从会话角色中随机选择一个
+            if not results and session_id and session_roles:
+                logger.info("未找到匹配角色，将从会话角色中随机选择一个")
+                random_role = random.choice(session_roles)
+                role_id = str(random_role.get("_id", random_role.get("role_id", "")))
+                role_name = random_role.get("name", random_role.get("role_name", "未知角色"))
+                
+                results.append({
+                    "role_id": role_id,
+                    "role_name": role_name,
+                    "score": 0.1,  # 设置一个较低的分数表示是随机选择的
+                    "match_reason": "随机选择",
+                    "details": {
+                        "semantic": 0.0,
+                        "keyword": 0.0,
+                        "context": 0.0,
+                        "random": True
+                    }
+                })
+                logger.info(f"随机选择了角色: {role_name} (ID: {role_id})")
+            
+            # 6. 按分数排序并限制返回数量
             results.sort(key=lambda x: x["score"], reverse=True)
             return results[:limit]
             
@@ -152,119 +225,91 @@ class RoleMatchingService:
         # 转换到 [0,1] 范围
         return float((similarity + 1) / 2)
     
-    def _compute_keyword_match(self, processed_text: str, role: Dict[str, Any]) -> float:
-        """计算关键词匹配分数"""
+    def _compute_keyword_match(self, processed_message: str, role: Dict) -> float:
+        """
+        计算关键词匹配分数
+        
+        Args:
+            processed_message: 预处理后的消息
+            role: 角色信息字典
+            
+        Returns:
+            关键词匹配分数 (0-1之间)
+        """
         try:
-            # 获取角色关键词
+            import json
+            
+            # 获取角色关键词 (支持多种可能的格式)
             keywords = role.get("keywords", [])
-            if not keywords:
-                # 如果角色没有定义关键词，尝试从描述中提取
-                description = role.get("description", "")
-                name = role.get("name", "")
-                if description:
-                    # 简单分词
-                    words = self._preprocess_text(description).split()
-                    # 取最多5个词作为关键词
-                    keywords = [w for w in words if len(w) > 1][:5]
+            
+            # 关键词可能是JSON字符串，尝试解析
+            if isinstance(keywords, str):
+                try:
+                    # 如果是JSON格式的字符串
+                    if keywords.startswith('[') and keywords.endswith(']'):
+                        keywords = json.loads(keywords)
+                    # 如果是逗号分隔的字符串
+                    else:
+                        keywords = [k.strip() for k in keywords.split(',') if k.strip()]
+                except json.JSONDecodeError:
+                    # 如果解析失败，尝试作为逗号分隔的字符串处理
+                    keywords = [k.strip() for k in keywords.split(',') if k.strip()]
                 
-                # 如果仍然没有关键词，使用角色名称
-                if not keywords and name:
-                    keywords = [name]
+            # 确保关键词是列表类型
+            if not isinstance(keywords, list):
+                logger.warning(f"角色关键词不是列表格式: {type(keywords)}")
+                return 0.0
                     
-                # 如果仍然没有关键词，返回基础分数
-                if not keywords:
-                    logger.warning(f"角色没有关键词: {role.get('name', '未知角色')}")
-                    return 0.2  # 基础分数
+            # 如果关键词为空，返回0分
+            if not keywords:
+                logger.debug("角色没有设置关键词，无法进行关键词匹配")
+                return 0.0
             
-            logger.info(f"角色 '{role.get('name', '未知角色')}' 的关键词: {keywords}")
+            # 记录关键词
+            role_name = role.get("name", role.get("role_name", "未知角色"))
+            logger.info(f"角色 '{role_name}' 的关键词: {keywords}")
             
-            # 统计关键词匹配数量
-            words = processed_text.split()
-            word_set = set(words)
-            
-            # 匹配结果
-            matched_keywords = []
-            exact_matches = []
-            partial_matches = []
+            # 计算匹配分数
+            exact_matches = 0
+            partial_matches = 0
             
             for keyword in keywords:
-                # 预处理关键词
-                processed_keyword = self._preprocess_text(keyword)
-                
-                # 检查完全匹配 (关键词作为整体出现在文本中)
-                if processed_keyword in processed_text:
-                    exact_matches.append(keyword)
-                    matched_keywords.append(keyword)
+                if not keyword or not isinstance(keyword, str):
                     continue
                 
-                # 检查部分匹配 (关键词的单词在文本中出现)
-                keyword_words = processed_keyword.split()
-                if len(keyword_words) > 1:
-                    matched_words = [w for w in keyword_words if w in word_set]
-                    if matched_words and len(matched_words) / len(keyword_words) >= 0.5:
-                        partial_matches.append(keyword)
-                        matched_keywords.append(keyword)
-                
-                # 如果关键词很短 (小于3个字符)，仅当完全匹配时才计算
-                if len(processed_keyword) < 3 and processed_keyword not in word_set:
+                keyword = keyword.lower().strip()
+                if not keyword:
                     continue
                     
-                # 检查单词级别的匹配 (关键词作为单词出现在文本中)
-                if processed_keyword in word_set:
-                    matched_keywords.append(keyword)
+                # 精确匹配 (1.0权重)
+                if keyword in processed_message:
+                    exact_matches += 1
+                    logger.info(f"精确匹配关键词: '{keyword}'")
+                    
+                # 部分匹配 (0.6权重)
+                elif any(keyword in token or token in keyword for token in self._tokenize(processed_message)):
+                    partial_matches += 1
+                    logger.info(f"部分匹配关键词: '{keyword}'")
+                
+            # 如果关键词列表为空，返回0分
+            valid_keywords = len([k for k in keywords if isinstance(k, str) and k.strip()])
+            if valid_keywords == 0:
+                return 0.0
             
-            # 记录匹配情况
-            if matched_keywords:
-                logger.info(f"角色 '{role.get('name', '未知角色')}' 匹配到关键词:")
-                if exact_matches:
-                    logger.info(f"  - 完全匹配: {exact_matches}")
-                if partial_matches:
-                    logger.info(f"  - 部分匹配: {partial_matches}")
-                
-                other_matches = [k for k in matched_keywords if k not in exact_matches and k not in partial_matches]
-                if other_matches:
-                    logger.info(f"  - 单词匹配: {other_matches}")
-                
-            # 计算匹配分数
-            # 完全匹配的关键词获得1.0的分数
-            # 部分匹配的关键词获得0.6的分数
-            # 单词匹配的关键词获得0.3的分数
-            total_score = 0
-            for keyword in matched_keywords:
-                if keyword in exact_matches:
-                    total_score += 1.0
-                elif keyword in partial_matches:
-                    total_score += 0.6
-                else:
-                    total_score += 0.3
+            # 计算总分
+            exact_score = exact_matches / valid_keywords
+            partial_score = (partial_matches / valid_keywords) * 0.6
+            
+            # 最终分数为精确匹配和部分匹配的和，最大为1.0
+            final_score = min(1.0, exact_score + partial_score)
                     
-            # 根据匹配的关键词数量和总关键词数量计算最终分数
-            if len(keywords) > 0:
-                # 归一化分数，但给多个匹配项加权
-                match_ratio = min(1.0, total_score / max(5, len(keywords)))
-                
-                # 如果匹配了多个关键词，给予额外奖励
-                if len(matched_keywords) > 1:
-                    match_ratio = min(1.0, match_ratio * (1 + 0.1 * (len(matched_keywords) - 1)))
-                
-                # 更好地平衡匹配数量和匹配比例
-                # 这使得匹配了更多关键词的角色会获得更高的分数
-                # 例如，匹配2/16比匹配1/7获得更高的分数
-                absolute_bonus = min(0.5, len(matched_keywords) * 0.05)
-                match_ratio += absolute_bonus
-                
-                # 确保分数不超过1.0
-                match_ratio = min(1.0, match_ratio)
-                    
-                logger.info(f"角色 '{role.get('name', '未知角色')}' 关键词匹配分数: {match_ratio:.3f}")
-                return match_ratio
-            else:
-                return 0
+            logger.info(f"关键词匹配分数: {final_score:.3f} (精确: {exact_matches}, 部分: {partial_matches}, 总关键词: {valid_keywords})")
+            return final_score
                 
         except Exception as e:
-            logger.error(f"计算关键词匹配分数失败: {str(e)}")
+            logger.error(f"计算关键词匹配分数时出错: {str(e)}")
             logger.error(traceback.format_exc())
-            return 0
+            return 0.0
     
     async def _compute_context_relevance(self, message: str, role: Dict[str, Any], session_id: str) -> float:
         """计算上下文关联分数"""
@@ -283,7 +328,7 @@ class RoleMatchingService:
                 return 0.5  # 默认中间值
                 
             # 检查角色在历史消息中的出现频率
-            role_id = str(role["_id"])
+            role_id = str(role.get("_id", role.get("role_id", "")))
             role_message_count = sum(1 for msg in recent_messages if msg.get("role_id") == role_id)
             
             # 计算上下文关联分数
@@ -315,7 +360,7 @@ class RoleMatchingService:
             if not redis_client:
                 logger.error("无法获取Redis客户端")
                 return None
-            
+                
             roles = []
             
             # 如果提供了会话ID，则只从会话中的角色中匹配
@@ -339,27 +384,16 @@ class RoleMatchingService:
                         logger.warning(f"会话角色数据格式不正确: {type(roles)}")
                         return None
                     
-                    # # 如果会话没有角色，返回None
-                    # if not session_roles:
-                    #     logger.warning(f"会话 {session_id} 没有角色")
-                    #     return None
+                    # 添加角色细节日志帮助调试
+                    for i, role in enumerate(roles):
+                        logger.info(f"会话角色 {i+1}:")
+                        logger.info(f"  - role_id: {role.get('role_id', 'N/A')}")
+                        logger.info(f"  - role_name: {role.get('role_name', 'N/A')}")
+                        logger.info(f"  - keywords: {role.get('keywords', 'N/A')}")
                     
-                    # # 获取会话中每个角色的详细信息
-                    # for role_info in session_roles:
-                    #     role_id = role_info.get("role_id")
-                    #     role_name = role_info.get("role_name")
-                    #     system_prompt = role_info.get("system_prompt")
-                        
-                    #     if role_id:
-                    #         role_key = f"role:{role_id}"
-                    #         role_data = await redis_client.get(role_key)
-                    #         if role_data:
-                    #             role = json.loads(role_data)
-                    #             if role.get("is_active", True):  # 默认为活跃
-                    #                 roles.append(role)
                 except json.JSONDecodeError:
                     logger.error(f"会话角色数据解析失败: {roles_data[:100]}...")
-                    return None
+                return None
                 
                 logger.info(f"会话中找到 {len(roles)} 个角色: {[r.get('role_name', '未知') for r in roles]}")
 
@@ -367,7 +401,7 @@ class RoleMatchingService:
             if not roles:
                 logger.warning("没有找到活跃角色可供匹配")
                 return None
-            
+                
             # 对消息进行预处理
             processed_message = self._preprocess_text(message)
             
@@ -375,6 +409,10 @@ class RoleMatchingService:
             results = []
             
             for role in roles:
+                # 修正字段名，确保使用正确的字段获取角色ID和名称
+                role_id = role.get("role_id", "")
+                role_name = role.get("role_name", "未知角色")
+                
                 # 计算关键词匹配分数 (1.0倍权重)
                 keyword_score = self._compute_keyword_match(processed_message, role)
                 
@@ -382,15 +420,15 @@ class RoleMatchingService:
                 final_score = keyword_score
                 
                 # 记录匹配分数
-                logger.info(f"角色 '{role.get('name', '未知角色')}' 关键词匹配分数: {final_score:.3f}")
+                logger.info(f"角色 '{role_name}' 关键词匹配分数: {final_score:.3f}")
                 
                 # 仅当分数超过最小阈值时才考虑
                 if final_score >= self.min_score:
                     match_reason = "基于关键词匹配"
                     
                     results.append({
-                        "role_id": role.get("id", ""),
-                        "name": role.get("name", "未知角色"),
+                        "role_id": role_id,
+                        "name": role_name,
                         "score": round(float(final_score), 3),
                         "match_reason": match_reason,
                         "details": {
@@ -401,18 +439,69 @@ class RoleMatchingService:
             # 按分数排序
             results.sort(key=lambda x: x["score"], reverse=True)
             
-            # 返回分数最高的角色
+            # 如果找到了匹配的角色，返回分数最高的
             if results:
                 logger.info(f"找到最佳匹配角色: {results[0]['name']}, 分数: {results[0]['score']}")
                 return results[0]
             else:
-                logger.warning("未找到合适的匹配角色")
-                return None
+                # 当没有匹配到角色时，随机选择一个
+                if roles:
+                    random_role = random.choice(roles)
+                    role_id = random_role.get("role_id", "")
+                    role_name = random_role.get("role_name", "未知角色")
+                    
+                    logger.info(f"未找到匹配角色，随机选择了: {role_name}")
+                    return {
+                        "role_id": role_id,
+                        "name": role_name,
+                        "score": 0.1,  # 设置一个较低的分数表示是随机选择的
+                        "match_reason": "随机选择",
+                        "details": {
+                            "keyword": 0.0,
+                            "random": True
+                        }
+                    }
+                else:
+                    logger.warning("未找到合适的匹配角色")
+                    return None
             
         except Exception as e:
             logger.error(f"角色匹配失败: {str(e)}")
             logger.error(traceback.format_exc())
             return None
+
+    def _tokenize(self, text: str) -> List[str]:
+        """
+        简单的文本分词函数，用于关键词匹配
+        
+        Args:
+            text: 要分词的文本
+            
+        Returns:
+            分词后的单词列表
+        """
+        if not text or not isinstance(text, str):
+            return []
+            
+        # 预处理文本
+        text = text.lower()
+        
+        # 简单的空格分词
+        words = [word.strip() for word in text.split() if word.strip()]
+        
+        # 添加字符级别的n-gram (对中文更友好)
+        char_ngrams = []
+        if any(c for c in text if '\u4e00' <= c <= '\u9fff'):  # 检测是否包含中文字符
+            # 为中文文本添加2-gram和3-gram
+            text_no_space = ''.join(text.split())
+            for i in range(len(text_no_space)):
+                if i + 2 <= len(text_no_space):
+                    char_ngrams.append(text_no_space[i:i+2])
+                if i + 3 <= len(text_no_space):
+                    char_ngrams.append(text_no_space[i:i+3])
+        
+        # 合并结果
+        return words + char_ngrams
 
 # 全局单例
 role_matching_service = RoleMatchingService() 

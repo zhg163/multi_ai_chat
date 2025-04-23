@@ -570,6 +570,7 @@
                 <h3>会话控制</h3>
                 <button id="end-session-btn" class="end-session-btn" style="width: 100%; padding: 10px; background-color: #ff4d4f; color: white; border: none; border-radius: 5px; cursor: pointer; font-size: 14px; transition: background-color 0.2s;">结束当前会话</button>
                 <div style="margin-top: 10px;">
+                    <a href="session_creator.html" style="display: block; width: 100%; padding: 10px; background-color: #1890ff; color: white; border: none; border-radius: 5px; cursor: pointer; font-size: 14px; transition: background-color 0.2s; text-align: center; text-decoration: none; margin-bottom: 5px;">创建自定义会话</a>
                     <a href="init_users.html" style="display: block; width: 100%; padding: 10px; background-color: #1890ff; color: white; border: none; border-radius: 5px; cursor: pointer; font-size: 14px; transition: background-color 0.2s; text-align: center; text-decoration: none; margin-bottom: 5px;">初始化用户</a>
                     <a href="init_roles.html" style="display: block; width: 100%; padding: 10px; background-color: #1890ff; color: white; border: none; border-radius: 5px; cursor: pointer; font-size: 14px; transition: background-color 0.2s; text-align: center; text-decoration: none; margin-bottom: 5px;">初始化角色</a>
                     <a href="star_map.html" style="display: block; width: 100%; padding: 10px; background-color: #1890ff; color: white; border: none; border-radius: 5px; cursor: pointer; font-size: 14px; transition: background-color 0.2s; text-align: center; text-decoration: none;">星图记忆</a>
@@ -673,78 +674,110 @@
         
         // 开始新会话
         async function startNewChat() {
-            // 添加创建中的状态反馈
-            addSystemMessage('正在创建新会话...');
+            // 收集创建会话需要的参数
+            const selectedUserId = localStorage.getItem('selectedUserId') || '';
+            const selectedUser = users.find(user => user._id === selectedUserId) || {name: '未选择用户'};
+            const selectedRoleIds = getSelectedRoleIds();
+            const selectedRoleNames = selectedRoleIds.map(id => {
+                const role = roles.find(r => r._id === id);
+                return role ? role.name : '未知角色';
+            });
             
-            // 禁用新建聊天按钮，防止重复点击
-            if (newChatButton) {
-                newChatButton.disabled = true;
-                newChatButton.textContent = '创建中...';
-            }
+            // 准备提交参数
+            const params = {
+                user_id: selectedUserId,
+                user_name: selectedUser.name,
+                role_ids: selectedRoleIds,
+                role_names: selectedRoleNames
+            };
             
-            try {
-                // 尝试通过API创建新会话
-                const response = await fetch('/api/memory/session/start', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' }
-                });
-                
-                if (response.ok) {
-                    const data = await response.json();
-                    if (data.success && data.session_id) {
-                        // 使用API返回的会话ID
-                        localStorage.setItem('currentSessionId', data.session_id);
-                        console.log('已创建新会话:', data.session_id);
+            // 显示确认对话框
+            showDialog(
+                '创建新会话',
+                `<h3>即将创建新会话</h3>
+                <p><strong>用户:</strong> ${params.user_name} (${params.user_id || '未选择'})</p>
+                <p><strong>角色:</strong> ${params.role_names.join(', ') || '未选择'}</p>
+                <p>确认创建这个会话吗？</p>`,
+                async () => {
+                    // 用户点击确认后执行
+                    try {
+                        // 添加创建中的状态反馈
+                        addSystemMessage('正在创建新会话...');
                         
-                        // 在聊天历史中添加新会话
-                        addSessionToHistory(data.session_id);
+                        // 禁用新建聊天按钮，防止重复点击
+                        if (newChatButton) {
+                            newChatButton.disabled = true;
+                            newChatButton.textContent = '创建中...';
+                        }
                         
-                        // 清空聊天界面
+                        // 尝试通过API创建新会话
+                        const response = await fetch('/api/memory/session/start', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(params)
+                        });
+                        
+                        if (response.ok) {
+                            const data = await response.json();
+                            if (data.success && data.session_id) {
+                                // 使用API返回的会话ID
+                                localStorage.setItem('currentSessionId', data.session_id);
+                                console.log('已创建新会话:', data.session_id);
+                                
+                                // 在聊天历史中添加新会话
+                                addSessionToHistory(data.session_id);
+                                
+                                // 清空聊天界面
+                                clearChatContainer();
+                                
+                                // 添加系统消息
+                                addSystemMessage('已成功创建并开始新的会话');
+                                
+                                // 高亮显示当前会话
+                                highlightCurrentSession(data.session_id);
+                                
+                                // 刷新页面
+                                location.reload();
+                                
+                                return data.session_id;
+                            }
+                        }
+                        
+                        // 如果API调用失败，使用本地生成的会话ID
+                        console.warn('API创建会话失败，使用本地会话ID');
+                        const newSessionId = generateSessionId();
+                        localStorage.setItem('currentSessionId', newSessionId);
+                        addSessionToHistory(newSessionId);
                         clearChatContainer();
-                        
-                        // 添加系统消息
-                        addSystemMessage('已成功创建并开始新的会话');
+                        addSystemMessage('已开始新的对话 (本地模式)');
                         
                         // 高亮显示当前会话
-                        highlightCurrentSession(data.session_id);
+                        highlightCurrentSession(newSessionId);
                         
-                        return data.session_id;
+                        return newSessionId;
+                    } catch (error) {
+                        console.error('创建会话失败:', error);
+                        
+                        // 出错时也使用本地生成的会话ID
+                        const newSessionId = generateSessionId();
+                        localStorage.setItem('currentSessionId', newSessionId);
+                        addSessionToHistory(newSessionId);
+                        clearChatContainer();
+                        addSystemMessage(`创建会话出错: ${error.message}，已切换到本地模式`);
+                        
+                        // 高亮显示当前会话
+                        highlightCurrentSession(newSessionId);
+                        
+                        return newSessionId;
+                    } finally {
+                        // 恢复新建聊天按钮状态
+                        if (newChatButton) {
+                            newChatButton.disabled = false;
+                            newChatButton.textContent = '新建聊天';
+                        }
                     }
                 }
-                
-                // 如果API调用失败，使用本地生成的会话ID
-                console.warn('API创建会话失败，使用本地会话ID');
-                const newSessionId = generateSessionId();
-                localStorage.setItem('currentSessionId', newSessionId);
-                addSessionToHistory(newSessionId);
-                clearChatContainer();
-                addSystemMessage('已开始新的对话 (本地模式)');
-                
-                // 高亮显示当前会话
-                highlightCurrentSession(newSessionId);
-                
-                return newSessionId;
-            } catch (error) {
-                console.error('创建会话失败:', error);
-                
-                // 出错时也使用本地生成的会话ID
-                const newSessionId = generateSessionId();
-                localStorage.setItem('currentSessionId', newSessionId);
-                addSessionToHistory(newSessionId);
-                clearChatContainer();
-                addSystemMessage(`创建会话出错: ${error.message}，已切换到本地模式`);
-                
-                // 高亮显示当前会话
-                highlightCurrentSession(newSessionId);
-                
-                return newSessionId;
-            } finally {
-                // 恢复新建聊天按钮状态
-                if (newChatButton) {
-                    newChatButton.disabled = false;
-                    newChatButton.textContent = '新建聊天';
-                }
-            }
+            );
         }
         
         // 高亮显示当前会话

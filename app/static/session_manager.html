@@ -367,6 +367,14 @@
     <div class="container">
         <h1>多AI聊天 - 会话管理</h1>
         
+        <!-- 导航栏 -->
+        <div class="nav-bar" style="margin-bottom: 20px; display: flex; gap: 10px; justify-content: center;">
+            <a href="stream_example.html" class="btn btn-primary">主界面</a>
+            <a href="session_creator.html" class="btn btn-primary">创建自定义会话</a>
+            <a href="init_users.html" class="btn btn-primary">初始化用户</a>
+            <a href="init_roles.html" class="btn btn-primary">初始化角色</a>
+        </div>
+        
         <div id="message" class="message"></div>
         
         <div class="three-column-layout">
@@ -495,147 +503,44 @@
         
         // 初始化页面
         async function initPage() {
-            showLoading('正在加载数据...');
-            console.log('初始化页面...');
-            
-            // 重置选择状态
-            selectedRoleIds = [];
-            selectedUserId = null;
-            
             try {
-                // 并行获取角色、用户和会话数据
-                const [rolesResponse, usersResponse, sessionsResponse] = await Promise.all([
-                    fetch('/api/roles').then(resp => {
-                        if (!resp.ok) throw new Error(`角色数据获取失败: ${resp.status}`);
-                        return resp.json();
-                    }),
-                    fetch('/api/users/').then(resp => {
-                        if (!resp.ok) throw new Error(`用户数据获取失败: ${resp.status}`);
-                        return resp.json();
-                    }),
-                    fetch('/api/custom-sessions/list').then(resp => {
-                        if (!resp.ok) throw new Error(`会话数据获取失败: ${resp.status}`);
-                        return resp.json();
-                    })
-                ]);
+                // 显示加载
+                showLoading('正在加载数据...');
                 
-                // 处理角色数据 - 可能是数组或对象，兼容处理
-                if (Array.isArray(rolesResponse)) {
-                    roles = rolesResponse;
-                } else if (rolesResponse && typeof rolesResponse === 'object') {
-                    // 如果是对象而不是数组，尝试提取角色列表
-                    if (rolesResponse.roles && Array.isArray(rolesResponse.roles)) {
-                        roles = rolesResponse.roles;
-                    } else if (rolesResponse.data && Array.isArray(rolesResponse.data)) {
-                        roles = rolesResponse.data;
-                    } else {
-                        // 尝试将对象值转换为数组
-                        roles = Object.values(rolesResponse).filter(item => item && typeof item === 'object');
-                    }
-                } else {
-                    roles = [];
+                // 获取所有角色
+                const rolesResponse = await fetch('/api/roles/');
+                if (!rolesResponse.ok) {
+                    throw new Error('获取角色列表失败');
                 }
+                roles = await rolesResponse.json();
                 
-                // 进一步处理角色数据，确保每个角色对象有_id字段
-                roles = roles.map(role => {
-                    // 确保有_id字段
-                    const roleWithId = !role._id && (role.id || role.role_id) 
-                        ? { ...role, _id: role.id || role.role_id } 
-                        : { ...role };
-                    
-                    // 确保system_prompt字段存在
-                    // 兼容不同的字段名
-                    if (!roleWithId.system_prompt) {
-                        roleWithId.system_prompt = roleWithId.system_message || roleWithId.systemPrompt || roleWithId.prompt || '';
-                    }
-                    
-                    return roleWithId;
-                }).filter(role => role && (role._id || role.id || role.role_id));
-                
-                // 处理用户数据 - 可能是数组或对象，兼容处理
-                if (Array.isArray(usersResponse)) {
-                    users = usersResponse;
-                } else if (usersResponse && typeof usersResponse === 'object') {
-                    // 如果是对象而不是数组，尝试提取用户列表
-                    if (usersResponse.users && Array.isArray(usersResponse.users)) {
-                        users = usersResponse.users;
-                    } else if (usersResponse.data && Array.isArray(usersResponse.data)) {
-                        users = usersResponse.data;
-                    } else {
-                        // 尝试将对象值转换为数组
-                        users = Object.values(usersResponse).filter(item => item && typeof item === 'object');
-                    }
-                } else {
-                    users = [];
+                // 获取用户
+                const usersResponse = await fetch('/api/users/');
+                if (!usersResponse.ok) {
+                    throw new Error('获取用户列表失败');
                 }
+                users = await usersResponse.json();
                 
-                // 进一步处理用户数据，确保每个用户对象有_id字段
-                users = users.map(user => {
-                    if (!user._id && (user.id || user.user_id || user.userId)) {
-                        return {
-                            ...user,
-                            _id: user.id || user.user_id || user.userId
-                        };
-                    }
-                    return user;
-                }).filter(user => user && (user._id || user.id || user.user_id || user.userId));
-                
-                // 处理会话数据
-                if (Array.isArray(sessionsResponse)) {
-                    sessions = sessionsResponse;
-                } else if (sessionsResponse && typeof sessionsResponse === 'object') {
-                    if (sessionsResponse.data && Array.isArray(sessionsResponse.data)) {
-                        sessions = sessionsResponse.data;
-                    } else {
-                        // 尝试将对象转换为数组
-                        sessions = Object.values(sessionsResponse).filter(item => item && typeof item === 'object');
-                    }
-                } else {
-                    sessions = [];
+                // 获取会话
+                const sessionsResponse = await fetch('/api/custom-sessions/list?page=1&limit=100');
+                if (!sessionsResponse.ok) {
+                    throw new Error('获取会话列表失败');
                 }
+                const sessionsData = await sessionsResponse.json();
+                console.log('获取到的会话列表数据:', sessionsData);
+                sessions = Array.isArray(sessionsData.data) ? sessionsData.data : [];
                 
-                console.log('数据加载和处理完成:', {
-                    roles: roles.length,
-                    users: users.length,
-                    sessions: sessions.length
-                });
-                
-                // 打印数据样本，以便调试
-                if (roles.length > 0) {
-                    console.log('角色数据样本:', roles[0]);
-                }
-                
-                if (users.length > 0) {
-                    console.log('用户数据样本:', users[0]);
-                }
-                
-                if (sessions.length > 0) {
-                    console.log('会话数据样本:', sessions[0]);
-                }
-                
-                // 渲染列表
+                // 渲染页面
                 renderRoleList();
                 renderUserList();
                 renderSessionList();
                 
-                // 初始化完成后强制更新按钮状态
-                forceUpdateButtonState();
-                
+                console.log('页面初始化完成');
             } catch (error) {
                 console.error('初始化页面失败:', error);
-                createMessageElement();
-                showMessage(`加载数据失败: ${error.message}`, 'error');
-                
-                // 确保即使失败也初始化为空数组
-                roles = roles || [];
-                users = users || [];
-                sessions = sessions || [];
-                
-                // 渲染空列表
-                renderRoleList();
-                renderUserList();
-                renderSessionList();
+                showMessage(`初始化页面失败: ${error.message}`, 'error');
             } finally {
+                // 隐藏加载
                 hideLoading();
             }
         }
@@ -1030,6 +935,102 @@
             }
         }
         
+        // 创建确认对话框
+        function createConfirmDialog(title, content, onConfirm, onCancel) {
+            // 创建对话框外层容器
+            const modalOverlay = document.createElement('div');
+            modalOverlay.className = 'modal-overlay';
+            modalOverlay.style.cssText = `
+                position: fixed;
+                top: 0;
+                left: 0;
+                width: 100%;
+                height: 100%;
+                background-color: rgba(0, 0, 0, 0.5);
+                display: flex;
+                justify-content: center;
+                align-items: center;
+                z-index: 9999;
+            `;
+            
+            // 创建对话框内容
+            const modalContent = document.createElement('div');
+            modalContent.className = 'modal-content';
+            modalContent.style.cssText = `
+                background-color: white;
+                padding: 20px;
+                border-radius: 8px;
+                box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+                max-width: 80%;
+                max-height: 80%;
+                overflow-y: auto;
+            `;
+            
+            // 创建标题
+            const modalTitle = document.createElement('h3');
+            modalTitle.textContent = title;
+            modalTitle.style.cssText = `
+                margin-top: 0;
+                border-bottom: 1px solid #eee;
+                padding-bottom: 10px;
+            `;
+            
+            // 创建内容
+            const modalBody = document.createElement('div');
+            modalBody.innerHTML = content;
+            modalBody.style.cssText = `
+                margin: 15px 0;
+                max-height: 60vh;
+                overflow-y: auto;
+                white-space: pre-wrap;
+                font-family: monospace;
+                background-color: #f8f9fa;
+                padding: 10px;
+                border-radius: 4px;
+                border: 1px solid #e9ecef;
+            `;
+            
+            // 创建按钮区域
+            const modalFooter = document.createElement('div');
+            modalFooter.style.cssText = `
+                display: flex;
+                justify-content: flex-end;
+                gap: 10px;
+                margin-top: 15px;
+                border-top: 1px solid #eee;
+                padding-top: 15px;
+            `;
+            
+            // 确认按钮
+            const confirmButton = document.createElement('button');
+            confirmButton.textContent = '确认';
+            confirmButton.className = 'btn btn-primary';
+            confirmButton.onclick = () => {
+                document.body.removeChild(modalOverlay);
+                if (typeof onConfirm === 'function') onConfirm();
+            };
+            
+            // 取消按钮
+            const cancelButton = document.createElement('button');
+            cancelButton.textContent = '取消';
+            cancelButton.className = 'btn btn-danger';
+            cancelButton.onclick = () => {
+                document.body.removeChild(modalOverlay);
+                if (typeof onCancel === 'function') onCancel();
+            };
+            
+            // 组装对话框
+            modalFooter.appendChild(cancelButton);
+            modalFooter.appendChild(confirmButton);
+            modalContent.appendChild(modalTitle);
+            modalContent.appendChild(modalBody);
+            modalContent.appendChild(modalFooter);
+            modalOverlay.appendChild(modalContent);
+            
+            // 添加到页面
+            document.body.appendChild(modalOverlay);
+        }
+
         // 创建会话
         async function createSession() {
             console.log('点击创建会话按钮');
@@ -1048,13 +1049,11 @@
             }
             
             // 显示当前状态
-            console.log('正在创建会话:', {
+            console.log('正在准备创建会话:', {
                 userId: selectedUserId,
                 roleIds: selectedRoleIds,
                 buttonState: document.getElementById('createSessionBtn').disabled
             });
-            
-            showLoading('正在创建会话...');
             
             try {
                 // 获取选中的用户信息
@@ -1089,90 +1088,99 @@
                     return roleData;
                 });
                 
+                // 添加请求标识符
+                const requestId = `req_${Date.now()}`;
+                
                 // 构建符合API要求的请求数据
                 const requestData = {
                     class_id: `class_${Date.now()}`, // 生成唯一的class_id
                     class_name: `${userName}的会话 (${new Date().toLocaleString('zh-CN')})`,
                     user_id: selectedUserId,
                     user_name: userName,
-                    roles: selectedRoles
+                    roles: selectedRoles,
+                    request_id: requestId // 添加请求标识符，方便在Network中查找
                 };
                 
-                console.log('发送请求数据:', requestData);
+                // 格式化要展示的参数内容
+                const formattedParams = JSON.stringify(requestData, null, 2);
                 
-                // 发送创建会话请求
-                const response = await fetch('/api/custom-sessions', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify(requestData)
-                });
-                
-                // 获取响应文本，用于调试
-                const responseText = await response.text();
-                console.log('服务器响应:', response.status, responseText);
-                
-                // 尝试解析JSON
-                let result;
-                try {
-                    result = JSON.parse(responseText);
-                } catch (e) {
-                    console.error('无法解析JSON响应:', e);
-                    throw new Error(`服务器返回了无效的JSON: ${responseText}`);
-                }
-                
-                if (!response.ok) {
-                    throw new Error(`服务器返回错误 (${response.status}): ${result.detail || result.message || responseText}`);
-                }
-                
-                if (result.session_id) {
-                    // 成功获取到会话ID
-                    showMessage('会话创建成功！正在跳转...', 'success');
-                    
-                    // 延迟一点时间再跳转，让用户看到成功消息
-                    setTimeout(() => {
-                        window.location.href = `/chat/${result.session_id}`;
-                    }, 1000);
-                    return;
-                } else if (result.success || result.id) {
-                    const sessionId = result.id || result._id;
-                    
-                    // 如果服务器返回了会话ID，直接跳转到聊天页面
-                    if (sessionId) {
-                        showMessage('会话创建成功！正在跳转...', 'success');
-                        
-                        // 延迟一点时间再跳转，让用户看到成功消息
-                        setTimeout(() => {
-                            window.location.href = `/chat/${sessionId}`;
-                        }, 1000);
-                        return;
-                    }
-                    
-                    // 否则重新获取会话列表
-                    showMessage('会话创建成功！', 'success');
-                    
-                    try {
-                        const sessionsResponse = await fetch('/api/custom-sessions/list');
-                        if (!sessionsResponse.ok) {
-                            console.warn('创建后刷新会话列表失败:', sessionsResponse.status);
-                        } else {
-                            const sessionsData = await sessionsResponse.json();
-                            sessions = Array.isArray(sessionsData) ? sessionsData : 
-                                      (sessionsData && Array.isArray(sessionsData.data)) ? sessionsData.data : [];
-                            renderSessionList();
+                // 显示确认对话框
+                createConfirmDialog(
+                    '确认创建会话',
+                    `<p>请确认是否创建以下会话：</p><div>${formattedParams}</div>`,
+                    async () => {
+                        try {
+                            // 用户确认，显示加载中
+                            showLoading('正在创建会话...');
+                            
+                            // 打印更详细的请求信息，帮助在Network面板中识别
+                            console.group('创建会话请求详情');
+                            console.log('请求URL:', '/api/custom-sessions');
+                            console.log('请求方法:', 'POST');
+                            console.log('请求ID:', requestId);
+                            console.log('请求数据:', JSON.stringify(requestData, null, 2));
+                            console.groupEnd();
+                            
+                            console.log('%c在Network面板中查找请求ID: ' + requestId, 'color: green; font-weight: bold');
+                            
+                            // 发送创建会话请求
+                            console.time('会话创建请求耗时');
+                            const response = await fetch('/api/custom-sessions', {
+                                method: 'POST',
+                                headers: {
+                                    'Content-Type': 'application/json',
+                                    'X-Request-ID': requestId // 添加请求头，方便在Network中标识
+                                },
+                                body: JSON.stringify(requestData)
+                            });
+                            console.timeEnd('会话创建请求耗时');
+                            
+                            // 获取响应文本，用于调试
+                            const responseText = await response.text();
+                            console.group('创建会话响应详情');
+                            console.log('响应状态:', response.status, response.statusText);
+                            console.log('响应头:', Object.fromEntries([...response.headers]));
+                            console.log('响应内容:', responseText);
+                            console.groupEnd();
+                            
+                            // 尝试解析JSON
+                            let result;
+                            try {
+                                result = JSON.parse(responseText);
+                            } catch (e) {
+                                console.error('无法解析JSON响应:', e);
+                                throw new Error(`服务器返回了无效的JSON: ${responseText}`);
+                            }
+                            
+                            if (!response.ok) {
+                                throw new Error(`服务器返回错误 (${response.status}): ${result.detail || result.message || responseText}`);
+                            }
+                            
+                            // 成功创建会话，显示成功消息
+                            console.log('会话创建成功:', result);
+                            showMessage('会话创建成功！页面将刷新...', 'success');
+                            
+                            // 延迟1秒后刷新页面
+                            setTimeout(() => {
+                                window.location.reload();
+                            }, 1000);
+                            
+                        } catch (error) {
+                            hideLoading();
+                            console.error('创建会话失败:', error);
+                            showMessage(`创建会话失败: ${error.message}`, 'error');
                         }
-                    } catch (refreshError) {
-                        console.warn('刷新会话列表错误:', refreshError);
+                    },
+                    () => {
+                        // 用户取消
+                        console.log('用户取消创建会话');
+                        showMessage('已取消创建会话', 'info');
                     }
-                } else {
-                    throw new Error(result.message || result.detail || '创建会话失败，服务器未返回成功状态');
-                }
+                );
+                
             } catch (error) {
-                console.error('创建会话失败:', error);
-                showMessage(`创建会话失败: ${error.message}`, 'error');
-            } finally {
-                hideLoading();
+                console.error('准备创建会话数据失败:', error);
+                showMessage(`准备会话数据失败: ${error.message}`, 'error');
             }
         }
         

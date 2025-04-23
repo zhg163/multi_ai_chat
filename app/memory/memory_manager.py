@@ -253,7 +253,7 @@ class MemoryManager:
         try:
             # 获取当前会话消息
             current_messages = await self.short_term_memory.get_session_messages(session_id, user_id)
-            
+                
             # 构建上下文
             context = []
             
@@ -329,8 +329,8 @@ class MemoryManager:
                     "end_time": session_info.get("end_time"),
                     "messages": messages,
                     "summary": None
-                }
-                
+                    }
+                    
             # 会话不存在
             return None
             

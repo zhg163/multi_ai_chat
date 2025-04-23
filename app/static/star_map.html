@@ -61,7 +61,7 @@
     <!-- 导航栏 -->
     <div class="nav-bar">
         <div class="nav-title">星图记忆</div>
-        <a href="stream_example.html" class="nav-link">返回对话测试页面</a>
+        <a href="/" class="nav-link">返回主页</a>
     </div>
     
     <!-- iframe容器 -->
@@ -70,8 +70,41 @@
 src="http://localhost:9222/chat/share?shared_id=82b92be41b6f11f0ac0fb939a4ce6906&from=chat&auth=Q3Njg2ZTlhMTNjMDExZjBhYTE4MzU1Yz&visible_avatar=1&locale=zh"
 style="width: 100%; height: 100%; min-height: 600px"
 frameborder="0"
+onload="this.style.display='block'"
+onerror="handleIframeError()"
 >
 </iframe>
+        <div id="fallback-message" style="display: none; padding: 20px; text-align: center;">
+            <h2>星图服务不可用</h2>
+            <p>抱歉，星图记忆服务当前不可用，可能由于以下原因：</p>
+            <ul style="list-style-type: none; padding: 0;">
+                <li>星图服务未启动（端口9222）</li>
+                <li>服务地址配置错误</li>
+                <li>网络连接问题</li>
+            </ul>
+            <p>请联系管理员或稍后再试。</p>
+        </div>
     </div>
+
+    <script>
+        function handleIframeError() {
+            document.querySelector('iframe').style.display = 'none';
+            document.getElementById('fallback-message').style.display = 'block';
+        }
+
+        // 也检查iframe加载超时
+        setTimeout(function() {
+            try {
+                var iframe = document.querySelector('iframe');
+                // 检查iframe内容是否加载
+                if (iframe.contentDocument.body.innerHTML === '') {
+                    handleIframeError();
+                }
+            } catch (e) {
+                // 如果无法访问iframe内容（跨域问题），也显示错误
+                handleIframeError();
+            }
+        }, 5000);  // 5秒后检查
+    </script>
 </body>
 </html> 

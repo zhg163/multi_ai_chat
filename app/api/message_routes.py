@@ -145,6 +145,38 @@ async def get_session_messages(
             detail=f"Failed to get message history: {str(e)}"
         )
 
+@router.get("/session/{session_id}/anonymous", response_model=MessageHistoryResponse)
+async def get_session_messages_anonymous(
+    session_id: str = Path(..., description="The ID of the session"),
+    limit: int = Query(50, ge=1, le=100, description="Number of messages to return"),
+    offset: int = Query(0, ge=0, description="Number of messages to skip"),
+    sort: str = Query("asc", description="Sort order: 'asc' for oldest first, 'desc' for newest first"),
+    db: AsyncIOMotorDatabase = Depends(get_database)
+):
+    """
+    获取匿名会话消息历史（不需要用户认证）
+    """
+    try:
+        sort_direction = 1 if sort.lower() == "asc" else -1
+        
+        message_service = MessageService(db)
+        # 使用匿名用户ID
+        result = await message_service.get_message_history(
+            session_id=session_id,
+            user_id="anonymous_user",  # 匿名用户ID
+            limit=limit,
+            offset=offset,
+            sort_direction=sort_direction
+        )
+        return result
+    except HTTPException as e:
+        raise e
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to get message history: {str(e)}"
+        )
+
 @router.delete("/session/{session_id}")
 async def delete_session_messages(
     session_id: str = Path(..., description="The ID of the session"),

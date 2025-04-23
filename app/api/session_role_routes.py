@@ -59,6 +59,40 @@ async def get_session_roles(
             detail=f"获取会话角色失败: {str(e)}"
         )
 
+@router.get("/{session_id}/roles/anonymous", response_model=List[SessionRoleResponse])
+async def get_session_roles_anonymous(
+    session_id: str
+):
+    """
+    获取会话的角色列表（匿名访问）
+    """
+    try:
+        # 匿名访问，不需要user_id
+        roles = await CustomSessionService.get_session_roles_anonymous(session_id)
+        
+        # 转换为响应模型格式
+        response = []
+        for role in roles:
+            response.append({
+                "id": str(role.get("_id")),
+                "name": role.get("name"),
+                "description": role.get("description"),
+                "status": role.get("status"),
+                "keywords": role.get("keywords")
+            })
+        
+        return response
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(e)
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"获取会话角色失败: {str(e)}"
+        )
+
 @router.post("/{session_id}/roles", status_code=status.HTTP_201_CREATED)
 async def add_session_role(
     session_id: str,

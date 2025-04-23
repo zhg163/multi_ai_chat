@@ -52,8 +52,14 @@ class RAGEnhancedService:
         self.message_service = message_service or MessageService()
         self.session_service = session_service or SessionService()
         self.role_service = role_service or RoleService()
+        
+        # 获取检索API密钥并确保正确格式
+        retrieval_key = settings.RETRIEVAL_API_KEY
+        if retrieval_key and not retrieval_key.startswith("skragflow-"):
+            retrieval_key = f"skragflow-{retrieval_key.strip()}"
+            
         self.retrieval_url = settings.RETRIEVAL_SERVICE_URL
-        self.api_key = settings.RETRIEVAL_API_KEY
+        self.api_key = retrieval_key
         self.ragflow_chat_id = settings.RAGFLOW_CHAT_ID
         self.stop_generation = {}  # Store message IDs that need to stop generation
         self._initialized = False
@@ -87,24 +93,111 @@ class RAGEnhancedService:
         
         # Initialize LLM client configuration
         from app.config import settings
-        self.default_provider = getattr(settings, "DEFAULT_LLM_PROVIDER", "openai")
-        self.default_model = getattr(settings, "DEFAULT_LLM_MODEL", "gpt-3.5-turbo")
+        
+        self.default_provider = getattr(settings, "DEFAULT_LLM_PROVIDER", "deepseek")
+        self.default_model = getattr(settings, "DEFAULT_LLM_MODEL", "deepseek-chat")
+        
+        # 直接从环境变量获取API密钥
         self.api_keys = {
             "openai": getattr(settings, "OPENAI_API_KEY", ""),
             "anthropic": getattr(settings, "ANTHROPIC_API_KEY", ""),
             "google": getattr(settings, "GOOGLE_API_KEY", ""),
+            "deepseek": os.environ.get("DEEPSEEK_API_KEY", "")  # 直接从环境变量获取
         }
         self.logger.info(f"LLM default provider: {self.default_provider}, default model: {self.default_model}")
+        
+        # 验证API密钥
+        self._validate_api_keys()
             
         self._initialized = True
         self.logger.info("RAGEnhancedService initialized successfully")
+        
+    def _validate_api_keys(self):
+        """验证API密钥的有效性和格式"""
+        import os
+        
+        # 检查知识库检索API密钥，仅当启用RAG时才警告
+        if not self.api_key or not self.api_key.strip():
+            self.logger.warning("未配置知识库检索API密钥，检索功能可能不可用")
+        else:
+            # 确保API密钥格式正确
+            api_key = self.api_key.strip()
+            if not api_key.startswith("skragflow-"):
+                self.logger.warning("知识库检索API密钥不是以skragflow-开头，自动添加前缀")
+                self.api_key = f"skragflow-{api_key}"
+        
+        # 只检查当前使用的提供商API密钥
+        current_provider = self.default_provider.lower()
+        if current_provider in self.api_keys:
+            key = self.api_keys[current_provider]
+            
+            # 如果是deepseek且密钥为空，尝试再次从环境变量获取
+            if current_provider == "deepseek" and (not key or not key.strip()):
+                env_key = os.environ.get("DEEPSEEK_API_KEY", "")
+                if env_key and env_key.strip():
+                    self.logger.info("从环境变量直接获取DEEPSEEK API密钥")
+                    self.api_keys["deepseek"] = env_key.strip()
+                    key = env_key.strip()
+            
+            if not key or not key.strip():
+                self.logger.warning(f"未配置{current_provider.upper()}的API密钥，当前服务可能不可用")
+            elif current_provider == "deepseek" and not key.startswith("sk-"):
+                self.logger.warning(f"{current_provider.upper()}的API密钥格式不正确，应以sk-开头")
+                self.api_keys[current_provider] = f"sk-{key.strip()}"
+                self.logger.info(f"已修正{current_provider.upper()}的API密钥格式")
+        else:
+            self.logger.warning(f"未知的提供商: {current_provider}，无法验证API密钥")
+        
+        # 其他提供商的API密钥以调试级别记录
+        for provider, key in self.api_keys.items():
+            if provider != current_provider:
+                if not key or not key.strip():
+                    self.logger.debug(f"未配置{provider.upper()}的API密钥，该服务将不可用")
         
     async def _ensure_initialized(self):
         """Ensure the service is initialized"""
         if not self._initialized:
             await self.initialize()
     
-    async def analyze_question(self, question: str, model: str) -> Tuple[bool, str]:
+    def should_skip_rag_analysis(self, question: str) -> tuple[bool, str]:
+        """
+        快速判断是否需要跳过RAG分析流程
+        
+        Args:
+            question: 用户问题
+        
+        Returns:
+            (是否跳过, 跳过原因)
+        """
+        # 清理并准备问题文本
+        cleaned_question = question.strip()
+        
+        # 规则1: 纯数字问题
+        if cleaned_question.isdigit():
+            return True, "纯数字问题无需RAG分析"
+        
+        # 规则2: 极短问题
+        if len(cleaned_question) < 6:
+            return True, "问题过短，无需RAG分析"
+        
+        # 规则3: 常见问候语
+        greetings = ["你好", "hello", "hi", "嗨", "早上好", "晚上好", "下午好"]
+        if cleaned_question.lower() in greetings or any(g in cleaned_question.lower() for g in greetings):
+            return True, "简单问候语无需RAG分析"
+        
+        # 规则4: 无实质内容
+        if set(cleaned_question).issubset(set("!！?？.,，。;；:：""''\"' ")):
+            return True, "问题仅包含标点符号，无需RAG分析"
+            
+        # 规则5: 简单指令
+        simple_commands = ["停止", "退出", "取消", "stop", "quit", "cancel", "谢谢", "谢谢你", "thanks", "thank you"]
+        if cleaned_question.lower() in simple_commands:
+            return True, "简单指令无需RAG分析"
+        
+        # 默认不跳过
+        return False, ""
+
+    async def analyze_question(self, question: str, model: str = None) -> dict:
         """
         Analyze the question to determine whether external knowledge base information is needed
         
@@ -113,12 +206,49 @@ class RAGEnhancedService:
             model: LLM model used (ignored, forced to use deepseek-chat)
             
         Returns:
-            (need_rag, thinking): Whether RAG is needed, analysis thinking process
+            Dictionary containing analysis results
         """
         # Ensure the service is initialized
         await self._ensure_initialized()
         
+        # 添加快速跳过规则检查
+        should_skip, skip_reason = self.should_skip_rag_analysis(question)
+        if should_skip:
+            self.logger.info(f"快速规则触发: {skip_reason}, 跳过RAG分析")
+            return {
+                "need_rag": False,
+                "reason": skip_reason,
+                "analysis": skip_reason,
+                "skip_full_analysis": True
+            }
+        
         self.logger.info(f"Analyzing whether RAG is needed for the question: {question[:50]}...")
+        
+        # If the question is too short or likely a greeting, don't use RAG
+        if len(question.strip()) < 5:
+            self.logger.info("Question too short, no RAG needed")
+            return {
+                "need_rag": False, 
+                "reason": "Question too short, no RAG needed",
+                "analysis": "Question too short, no RAG needed"
+            }
+        
+        # Simple heuristic: these types of questions rarely need external knowledge
+        simple_patterns = [
+            r'^(你好|hello|hi)[!！.,？?]*$',  # Greetings
+            r'^(谢谢|thank)[!！.,？?]*$',     # Thanks
+            r'^(是的|yes|no|不是)[!！.,？?]*$',  # Simple yes/no
+        ]
+        
+        for pattern in simple_patterns:
+            if re.match(pattern, question.strip(), re.IGNORECASE):
+                reason = f"Question matches simple pattern, no RAG needed: {pattern}"
+                self.logger.info(reason)
+                return {
+                    "need_rag": False, 
+                    "reason": reason,
+                    "analysis": reason
+                }
         
         # Force using deepseek-chat model
         model = "deepseek-chat"
@@ -142,30 +272,53 @@ Please keep the analysis concise and logical, focusing on the relevance to the q
 
         # Call LLM for analysis
         try:
-            response = await self.llm_service.chat_completion(
-                model=model,
-                messages=[
-                    {"role": "system", "content": "You are a responsible assistant for determining whether a question needs external knowledge. Please analyze the given question and determine whether you need to retrieve information from the external knowledge base."},
-                    {"role": "user", "content": prompt}
-                ],
-                stream=False,
-                temperature=0.1,
-                max_tokens=500
-            )
+            max_retries = 2
+            retry_count = 0
             
-            analysis = response.get("choices", [{}])[0].get("message", {}).get("content", "")
-            self.logger.info(f"Question analysis result: {analysis[:100]}...")
+            while retry_count <= max_retries:
+                try:
+                    response = await self.llm_service.chat_completion(
+                        model=model,
+                        messages=[
+                            {"role": "system", "content": "You are a responsible assistant for determining whether a question needs external knowledge. Please analyze the given question and determine whether you need to retrieve information from the external knowledge base."},
+                            {"role": "user", "content": prompt}
+                        ],
+                        stream=False,
+                        temperature=0.1,
+                        max_tokens=500
+                    )
+                    
+                    analysis = response.get("choices", [{}])[0].get("message", {}).get("content", "")
+                    self.logger.info(f"Question analysis result: {analysis[:100]}...")
+                    
+                    # Extract whether RAG is needed
+                    need_rag = False
+                    if "【Need to retrieve】: Yes" in analysis or "【Need to retrieve】:Yes" in analysis:
+                        need_rag = True
+                    
+                        return {
+                            "need_rag": need_rag, 
+                            "reason": "LLM analysis result", 
+                            "analysis": analysis
+                        }
+                    
+                except Exception as e:
+                    retry_count += 1
+                    if retry_count <= max_retries:
+                        self.logger.warning(f"Retry {retry_count}/{max_retries} for analyzing question after error: {str(e)}")
+                        await asyncio.sleep(1)  # Wait before retrying
+                    else:
+                        raise
             
-            # Extract whether RAG is needed
-            need_rag = False
-            if "【Need to retrieve】: Yes" in analysis or "【Need to retrieve】:Yes" in analysis:
-                need_rag = True
-            
-            return need_rag, analysis
         except Exception as e:
             self.logger.error(f"Failed to analyze question: {str(e)}")
-            # Default to RAG when an error occurs
-            return True, f"An error occurred during analysis, and RAG will be used for safety. Error information: {str(e)}"
+            # Default to RAG when an error occurs for safety
+            error_message = f"An error occurred during analysis, and RAG will be used for safety. Error information: {str(e)}"
+            return {
+                "need_rag": True,
+                "reason": "Error during analysis",
+                "analysis": error_message
+            }
     
     async def retrieve_documents(self, query: str) -> List[Dict[str, Any]]:
         """
@@ -193,8 +346,15 @@ Please keep the analysis concise and logical, focusing on the relevance to the q
                     "Content-Type": "application/json",
                 }
                 
-                if self.api_key:
-                    headers["Authorization"] = f"Bearer {self.api_key}"
+                # 只有在API密钥存在时才添加Authorization头
+                if self.api_key and self.api_key.strip():
+                    # 确保API密钥格式正确
+                    api_key = self.api_key.strip()
+                    if not api_key.startswith("skragflow-"):
+                        api_key = f"skragflow-{api_key}"
+                    headers["Authorization"] = f"Bearer {api_key}"
+                else:
+                    self.logger.warning("未提供API密钥，可能导致检索服务授权失败")
                 
                 response = await client.post(
                     self.retrieval_url,
@@ -248,6 +408,56 @@ Please keep the analysis concise and logical, focusing on the relevance to the q
             formatted_text += f"Content: {content}\n\n"
         
         return formatted_text
+    
+    def _build_augmented_prompt(self, user_question: str, context: str, lang: str = "zh") -> str:
+        """
+        Build an augmented prompt with retrieved context for RAG
+        
+        Args:
+            user_question: Original user question
+            context: Retrieved context from knowledge base
+            lang: Language for prompt templates (zh for Chinese, en for English)
+            
+        Returns:
+            Augmented prompt for LLM
+        """
+        if lang.lower() == "en":
+            return f"""I need you to answer the question based on both the provided reference materials and your knowledge.
+
+Reference Materials:
+{context}
+
+Question: {user_question}
+
+Instructions:
+1. If the reference materials directly contain information relevant to the question, prioritize using this information.
+2. Cite your sources by referring to the reference number: [1], [2], etc. whenever you use information from the references.
+3. If the reference materials do not contain enough information, supplement with your own knowledge.
+4. Provide a clear, concise, and accurate answer.
+5. If you're adding information beyond what's in the references, clearly indicate this with phrases like "Beyond the provided references..." or "Based on my knowledge..."
+6. If the references contradict each other, note this and explain which information is likely more reliable.
+7. If the references are not relevant to the question, ignore them and answer based on your knowledge, making it clear you're doing so.
+
+Answer:"""
+        else:
+            # Default to Chinese
+            return f"""请根据提供的参考资料和你的知识来回答问题。
+
+参考资料：
+{context}
+
+问题：{user_question}
+
+回答要求：
+1. 如果参考资料中直接包含与问题相关的信息，请优先使用这些信息。
+2. 引用来源时请参考资料编号：[1]、[2]等，确保在使用参考资料信息时明确指出出处。
+3. 如果参考资料中没有足够的信息，可以补充你自己的知识。
+4. 提供清晰、简明、准确的回答。
+5. 如果你添加了参考资料之外的信息，请明确指出，例如使用"除了提供的参考资料外..."或"根据我的知识..."等表述。
+6. 如果参考资料之间存在矛盾，请注意指出并解释哪些信息可能更可靠。
+7. 如果参考资料与问题无关，请忽略它们并根据你的知识回答，同时明确说明你这样做的原因。
+
+回答："""
     
     async def verify_session_exists(self, session_id: str, user_id: str) -> bool:
         """
@@ -327,6 +537,10 @@ Please keep the analysis concise and logical, focusing on the relevance to the q
         message_id = str(uuid.uuid4())
         self.stop_generation[message_id] = False
         
+        # 用于收集完整的AI响应
+        ai_response_parts = []
+        user_question = ""
+        
         # 在返回的第一个数据包中包含message_id，供前端保存和停止生成使用
         yield {"message_id": message_id}
         
@@ -340,7 +554,8 @@ Please keep the analysis concise and logical, focusing on the relevance to the q
         try:
             # 验证消息列表
             if not messages or not isinstance(messages, list):
-                yield {"error": "消息列表为空或格式不正确"}
+                error_msg = "消息列表为空或格式不正确"
+                yield {"error": error_msg}
                 return
             
             # 获取最后一条用户消息
@@ -348,10 +563,12 @@ Please keep the analysis concise and logical, focusing on the relevance to the q
             for msg in reversed(messages):
                 if msg.get("role") == "user":
                     last_user_message = msg.get("content", "").strip()
+                    user_question = last_user_message
                     break
             
             if not last_user_message:
-                yield {"error": "找不到用户消息"}
+                error_msg = "找不到用户消息"
+                yield {"error": error_msg}
                 return
             
             # 确定要使用的模型
@@ -384,6 +601,7 @@ Please keep the analysis concise and logical, focusing on the relevance to the q
                             }
                             
                             # 获取角色系统消息
+                            from app.services.session_role_manager import SessionRoleManager
                             session_role_manager = SessionRoleManager()
                             role_data = await session_role_manager.get_role(role_id)
                             if role_data and "system_prompt" in role_data:
@@ -471,7 +689,7 @@ Please keep the analysis concise and logical, focusing on the relevance to the q
                                 # 检查消息键是否存在
                                 key_exists = await redis_client.exists(redis_key)
                                 logger.info(f"Redis消息键 {redis_key} 存在: {key_exists}")
-                                
+                    
                                 if key_exists:
                                     # 获取消息记录
                                     messages_data = await redis_client.lrange(redis_key, 0, -1)
@@ -489,13 +707,13 @@ Please keep the analysis concise and logical, focusing on the relevance to the q
                                             logger.warning(f"解析消息失败: {msg_data[:100]}")
                                             continue
                                     
-                                    # 将历史消息添加到完整消息列表中
+                        # 将历史消息添加到完整消息列表中
                                     logger.info(f"成功解析 {len(history)} 条有效历史消息")
-                                    for msg in history:
-                                        complete_messages.append({
-                                            "role": msg.get("role", "user"),
-                                            "content": msg.get("content", "")
-                                        })
+                                for msg in history:
+                                    complete_messages.append({
+                                        "role": msg.get("role", "user"),
+                                        "content": msg.get("content", "")
+                                    })
                                 else:
                                     logger.warning(f"Redis中不存在消息键 {redis_key}")
                             else:
@@ -515,10 +733,20 @@ Please keep the analysis concise and logical, focusing on the relevance to the q
             
             # 分析用户问题，确定是否需要搜索
             search_needed = False
+            analysis = ""
             if enable_rag:
                 # 使用分析器检查问题是否需要搜索相关文档
-                search_needed = await self.analyze_question(last_user_message, model)
-                logger.info(f"问题分析结果: 【需要检索】: {'是' if search_needed else '否'}")
+                analysis_result = await self.analyze_question(last_user_message, model)
+                search_needed = analysis_result.get("need_rag", False)
+                analysis = analysis_result.get("analysis", "")
+                reason = analysis_result.get("reason", "")
+                
+                # 检查是否使用了快速规则跳过
+                if analysis_result.get("skip_full_analysis", False):
+                    self.logger.info(f"使用快速规则评估: {reason}")
+                else:
+                    self.logger.info(f"问题分析结果: 【需要检索】: {'是' if search_needed else '否'}")
+                    self.logger.debug(f"分析详情: {analysis[:200]}...")
             
             # 如果需要搜索，则检索文档并增强查询
             if search_needed:
@@ -535,13 +763,15 @@ Please keep the analysis concise and logical, focusing on the relevance to the q
                             complete_messages,
                             config=model_config,
                             message_id=message_id,
-                            stop_generation=self.stop_generation
+                            stop_generation=self.stop_generation[message_id]
                         ):
+                            # 收集响应以保存到内存
+                            if isinstance(response, dict) and "content" in response:
+                                ai_response_parts.append(response["content"])
                             yield response
-                        return
-                    
-                    # 构建格式化的上下文
-                    context_str = self.format_retrieved_documents(retrieved_docs)
+                    else:
+                        # 构建格式化的上下文
+                        context_str = self.format_retrieved_documents(retrieved_docs)
                     
                     # 构建增强的提示
                     augmented_msg = self._build_augmented_prompt(
@@ -557,13 +787,18 @@ Please keep the analysis concise and logical, focusing on the relevance to the q
                         enhanced_messages,
                         config=model_config,
                         message_id=message_id,
-                        stop_generation=self.stop_generation
+                            stop_generation=self.stop_generation[message_id]
                     ):
+                        # 收集响应以保存到内存
+                        if isinstance(response, dict) and "content" in response:
+                                ai_response_parts.append(response["content"])
                         yield response
                     
                 except Exception as e:
-                    logger.error(f"处理RAG增强查询时出错: {str(e)}", exc_info=True)
-                    yield {"error": f"处理增强查询失败: {str(e)}"}
+                    error_msg = f"处理RAG增强查询时出错: {str(e)}"
+                    logger.error(error_msg, exc_info=True)
+                    yield {"error": error_msg}
+                    return
             else:
                 # 不需要搜索，直接使用原始消息调用LLM
                 try:
@@ -571,12 +806,37 @@ Please keep the analysis concise and logical, focusing on the relevance to the q
                         complete_messages,
                         config=model_config,
                         message_id=message_id,
-                        stop_generation=self.stop_generation
+                        stop_generation=self.stop_generation[message_id]
                     ):
+                        # 收集响应以保存到内存
+                        if isinstance(response, dict) and "content" in response:
+                            ai_response_parts.append(response["content"])
                         yield response
                 except Exception as e:
-                    logger.error(f"生成回复时出错: {str(e)}", exc_info=True)
-                    yield {"error": f"生成回复失败: {str(e)}"}
+                    error_msg = f"生成回复时出错: {str(e)}"
+                    logger.error(error_msg, exc_info=True)
+                    yield {"error": error_msg}
+                    return
+            
+            # 保存对话到记忆（如果提供了会话ID和用户ID）
+            if session_id and user_id and ai_response_parts:
+                try:
+                    # 组合完整的AI响应
+                    full_ai_response = "".join(ai_response_parts)
+                    logger.info(f"保存对话到记忆, 用户ID: {user_id}, 会话ID: {session_id}, AI响应长度: {len(full_ai_response)}")
+                    
+                    # 调用保存方法
+                    user_msg_id, ai_msg_id = await self.save_to_memory(
+                        session_id, user_id, user_question, full_ai_response, role_id
+                    )
+                    
+                    if user_msg_id and ai_msg_id:
+                        logger.info(f"对话已保存, 用户消息ID: {user_msg_id}, AI消息ID: {ai_msg_id}")
+                    else:
+                        logger.warning("保存对话失败")
+                except Exception as e:
+                    logger.error(f"保存对话到记忆时出错: {str(e)}", exc_info=True)
+                    # 保存失败不影响响应返回
                     
         except Exception as e:
             # 捕获整个处理过程中的所有其他错误
@@ -677,8 +937,8 @@ Please keep the analysis concise and logical, focusing on the relevance to the q
                         redis_client = memory_manager.short_term_memory.redis
                         session_role_manager = SessionRoleManager(redis_client)
                         
-                        # Update role usage count
-                        await session_role_manager.update_role_usage_count(session_id, user_id, role_id)
+                        # Update role usage count - 修正传递的参数
+                        await session_role_manager.update_role_usage_count(session_id, role_id)
                         self.logger.info(f"Updated role {role_id} usage count")
                 except Exception as e:
                     self.logger.error(f"Failed to update role usage count: {str(e)}")
@@ -774,10 +1034,32 @@ Please keep the analysis concise and logical, focusing on the relevance to the q
         Returns:
             模型配置字典，或错误消息字符串
         """
+        import os
+        
         try:
+            # 处理API密钥
+            final_api_key = api_key
+            
             # 如果提供了provider和model_name，优先使用这些
             if provider and model_name:
                 logger.info(f"使用指定的提供商 {provider} 和模型 {model_name}")
+                
+                # 如果没有提供API密钥，尝试从配置中获取
+                if not final_api_key and provider in self.api_keys:
+                    final_api_key = self.api_keys.get(provider, "")
+                    
+                # 特别处理deepseek提供商
+                if provider.lower() == "deepseek" and not final_api_key:
+                    # 如果通过self.api_keys获取失败，尝试直接从环境变量获取
+                    env_key = os.environ.get("DEEPSEEK_API_KEY", "")
+                    if env_key and env_key.strip():
+                        logger.info("从环境变量获取DEEPSEEK API密钥")
+                        final_api_key = env_key.strip()
+                    
+                # 对deepseek提供商特殊处理
+                if provider.lower() == "deepseek" and final_api_key and not final_api_key.startswith("sk-"):
+                    logger.info("Deepseek API密钥格式调整，添加sk-前缀")
+                    final_api_key = f"sk-{final_api_key}"
                 
                 # 获取基础参数
                 params = self._get_llm_params(provider)
@@ -786,7 +1068,7 @@ Please keep the analysis concise and logical, focusing on the relevance to the q
                 return {
                     "provider": provider,
                     "model_name": model_name,
-                    "api_key": api_key,
+                    "api_key": final_api_key,
                     **params
                 }
             
@@ -797,6 +1079,15 @@ Please keep the analysis concise and logical, focusing on the relevance to the q
                     provider_part, model_part = model.split("/", 1)
                     logger.info(f"从旧格式解析: 提供商 {provider_part}, 模型 {model_part}")
                     
+                    # 如果没有提供API密钥，尝试从配置中获取
+                    if not final_api_key and provider_part in self.api_keys:
+                        final_api_key = self.api_keys.get(provider_part, "")
+                        
+                    # 对deepseek提供商特殊处理
+                    if provider_part.lower() == "deepseek" and final_api_key and not final_api_key.startswith("sk-"):
+                        logger.info("Deepseek API密钥格式调整，添加sk-前缀")
+                        final_api_key = f"sk-{final_api_key}"
+                    
                     # 获取基础参数
                     params = self._get_llm_params(provider_part)
                     
@@ -804,12 +1095,21 @@ Please keep the analysis concise and logical, focusing on the relevance to the q
                     return {
                         "provider": provider_part,
                         "model_name": model_part,
-                        "api_key": api_key,
+                        "api_key": final_api_key,
                         **params
                     }
                 else:
                     # 默认使用deepseek作为提供商
                     logger.info(f"只提供了模型名称 {model}，使用默认提供商 deepseek")
+                    
+                    # 如果没有提供API密钥，尝试从配置中获取
+                    if not final_api_key and "deepseek" in self.api_keys:
+                        final_api_key = self.api_keys.get("deepseek", "")
+                        
+                    # 对deepseek提供商特殊处理
+                    if final_api_key and not final_api_key.startswith("sk-"):
+                        logger.info("Deepseek API密钥格式调整，添加sk-前缀")
+                        final_api_key = f"sk-{final_api_key}"
                     
                     # 获取基础参数
                     params = self._get_llm_params("deepseek")
@@ -818,13 +1118,22 @@ Please keep the analysis concise and logical, focusing on the relevance to the q
                     return {
                         "provider": "deepseek",
                         "model_name": model,
-                        "api_key": api_key,
+                        "api_key": final_api_key,
                         **params
                     }
             
             # 使用默认配置
             else:
                 logger.info("使用默认提供商 deepseek 和模型 deepseek-chat")
+                
+                # 如果没有提供API密钥，尝试从配置中获取
+                if not final_api_key and "deepseek" in self.api_keys:
+                    final_api_key = self.api_keys.get("deepseek", "")
+                    
+                # 对deepseek提供商特殊处理
+                if final_api_key and not final_api_key.startswith("sk-"):
+                    logger.info("Deepseek API密钥格式调整，添加sk-前缀")
+                    final_api_key = f"sk-{final_api_key}"
                 
                 # 获取基础参数
                 params = self._get_llm_params("deepseek")
@@ -833,7 +1142,7 @@ Please keep the analysis concise and logical, focusing on the relevance to the q
                 return {
                     "provider": "deepseek",
                     "model_name": "deepseek-chat",
-                    "api_key": api_key,
+                    "api_key": final_api_key,
                     **params
                 }
                 
@@ -855,3 +1164,16 @@ Please keep the analysis concise and logical, focusing on the relevance to the q
         # ...
         
         self.logger.info("RAG增强服务关闭完成") 
+
+    # 在服务启动时验证关键配置
+    def validate_api_keys(self):
+        if not settings.DEEPSEEK_API_KEY:
+            self.logger.warning("未配置DEEPSEEK_API_KEY，Deepseek服务将不可用")
+
+        if self.api_key:
+            if not self.api_key.startswith("sk-"):
+                self.logger.warning("Deepseek API密钥不是以sk-开头，自动添加前缀")
+                self.api_key = f"sk-{self.api_key}"
+        else:
+            self.logger.error("未提供Deepseek API密钥")
+            raise ValueError("使用Deepseek服务需要提供有效的API密钥") 

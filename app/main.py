@@ -203,24 +203,69 @@ try:
     logger.info("自定义会话路由已加载")
 except ImportError as e:
     logger.error(f"无法导入自定义会话路由: {str(e)}")
+
+# 导入会话角色路由
+try:
+    from app.api.session_role_routes import router as session_role_router
+    app.include_router(session_role_router)
+    logger.info("会话角色路由已加载")
+except ImportError as e:
+    logger.error(f"无法导入会话角色路由: {str(e)}")
+
+# 导入会话记忆路由
+try:
+    from app.api.memory_routes import router as memory_router
+    app.include_router(memory_router)
+    logger.info("会话记忆路由已加载")
+except ImportError as e:
+    # 文件已被删除，记录警告而不是错误
+    logger.warning(f"会话记忆路由模块已移除，跳过导入: {str(e)}")
     
-# 导入标准数据库模块
-from app.database.mongodb import get_database, get_collection
+    # 尝试使用备用路由
+    try:
+        from app.api.endpoints.memory import router as memory_router
+        app.include_router(memory_router)
+        logger.info("使用备用记忆管理路由")
+    except ImportError:
+        logger.info("备用记忆路由也不可用，应用将继续运行")
 
-# 静态文件挂载
-app.mount("/static", StaticFiles(directory=os.path.join(current_dir, "static")), name="static")
+# 导入消息路由
+try:
+    from app.api.message_routes import router as message_router
+    app.include_router(message_router)
+    logger.info("消息路由已加载")
+except ImportError as e:
+    logger.error(f"无法导入消息路由: {str(e)}")
 
-# 添加RAG聊天页面路由
+# 挂载静态文件目录
+static_dir = os.path.join(current_dir, "static")
+app.mount("/static", StaticFiles(directory=static_dir), name="static")
+
+# RAG聊天页面
 @app.get("/rag-chat", response_class=HTMLResponse)
 async def rag_chat():
     """RAG增强聊天页面"""
     try:
-        with open(os.path.join(current_dir, "static", "rag-chat.html"), "r", encoding="utf-8") as f:
+        html_file = os.path.join(static_dir, "rag-chat.html")
+        with open(html_file, "r", encoding="utf-8") as f:
             html_content = f.read()
         return HTMLResponse(content=html_content)
     except Exception as e:
-        logger.error(f"读取RAG聊天页面失败: {str(e)}")
-        return HTMLResponse(content="<h1>加载RAG聊天页面失败</h1>")
+        logger.error(f"无法加载RAG聊天页面: {str(e)}")
+        raise HTTPException(status_code=500, detail="无法加载聊天页面")
+
+# 流式API测试页面
+@app.get("/stream-test", response_class=HTMLResponse)
+async def stream_test():
+    """流式API测试页面"""
+    try:
+        html_file = os.path.join(static_dir, "stream_test.html")
+        with open(html_file, "r", encoding="utf-8") as f:
+            html_content = f.read()
+        return HTMLResponse(content=html_content)
+    except Exception as e:
+        logger.error(f"无法加载流式API测试页面: {str(e)}")
+        raise HTTPException(status_code=500, detail="无法加载测试页面")
 
 # 添加简易用户API路由
 @app.get("/api/users/", tags=["users"])
@@ -543,12 +588,55 @@ async def session_manager():
         logger.error(f"读取会话管理页面失败: {str(e)}")
         return HTMLResponse(content="<h1>加载会话管理页面失败</h1>")
 
+# 添加会话创建页面路由
+@app.get("/session-creator", response_class=HTMLResponse)
+async def session_creator():
+    """会话创建页面"""
+    try:
+        with open(os.path.join(current_dir, "static", "session_creator.html"), "r", encoding="utf-8") as f:
+            html_content = f.read()
+        return HTMLResponse(content=html_content)
+    except Exception as e:
+        logger.error(f"读取会话创建页面失败: {str(e)}")
+        return HTMLResponse(content="<h1>加载会话创建页面失败</h1>")
+
+# 添加两阶段API演示页面路由
+@app.get("/two-phase-chat", response_class=HTMLResponse)
+async def two_phase_chat():
+    """两阶段API演示页面"""
+    try:
+        with open(os.path.join(current_dir, "static", "two-phase-chat.html"), "r", encoding="utf-8") as f:
+            html_content = f.read()
+        return HTMLResponse(content=html_content)
+    except Exception as e:
+        logger.error(f"读取两阶段API演示页面失败: {str(e)}")
+        return HTMLResponse(content="<h1>加载两阶段API演示页面失败</h1>")
+
+# 添加星图页面路由
+@app.get("/star-map", response_class=HTMLResponse)
+async def star_map():
+    """星图页面"""
+    try:
+        with open(os.path.join(current_dir, "static", "star_map.html"), "r", encoding="utf-8") as f:
+            html_content = f.read()
+        return HTMLResponse(content=html_content)
+    except Exception as e:
+        logger.error(f"读取星图页面失败: {str(e)}")
+        return HTMLResponse(content="<h1>加载星图页面失败</h1>")
+
 # 添加对直接访问HTML文件的重定向
 @app.get("/session_manager.html", response_class=HTMLResponse)
 async def session_manager_html_redirect():
     """重定向到会话管理页面"""
     logger.info("检测到直接访问/session_manager.html，重定向到/session-manager")
-    return RedirectResponse(url="/session-manager") 
+    return RedirectResponse(url="/session-manager")
+
+# 添加对直接访问session_creator.html的重定向
+@app.get("/session_creator.html", response_class=HTMLResponse)
+async def session_creator_html_redirect():
+    """重定向到会话创建页面"""
+    logger.info("检测到直接访问/session_creator.html，重定向到/session-creator")
+    return RedirectResponse(url="/session-creator")
 
 # 添加对rag-chat.html的重定向
 @app.get("/static/rag-chat.html", response_class=HTMLResponse)
@@ -562,38 +650,46 @@ async def rag_chat_html_redirect(request: Request):
         redirect_url = f"{redirect_url}?{query_params}"
     return RedirectResponse(url=redirect_url) 
 
+# 添加对star_map.html的重定向
+@app.get("/static/star_map.html", response_class=HTMLResponse)
+async def star_map_html_redirect(request: Request):
+    """重定向到星图页面，保留查询参数"""
+    logger.info("检测到直接访问/static/star_map.html，重定向到/star-map")
+    # 获取原始URL中的查询参数
+    query_params = request.url.query
+    redirect_url = "/star-map"
+    if query_params:
+        redirect_url = f"{redirect_url}?{query_params}"
+    return RedirectResponse(url=redirect_url) 
+
 @app.on_event("shutdown")
 async def shutdown_event():
-    """应用关闭时执行的操作，关闭所有资源连接"""
+    """应用关闭时的清理操作"""
     logger.info("正在关闭应用...")
     
-    # 关闭LLM服务的会话
+    # 关闭LLM服务
     try:
-        from app.services.llm_service import LLMService
-        # 获取LLM服务实例进行关闭
-        from app.api.llm_routes import llm_service
-        if hasattr(llm_service, 'close') and callable(llm_service.close):
-            await llm_service.close()
-            logger.info("LLM服务会话已关闭")
+        from app.services.llm_service import llm_service
+        await llm_service.close()
+        logger.info("LLM服务会话已关闭")
     except Exception as e:
         logger.error(f"关闭LLM服务会话时出错: {str(e)}")
     
-    # 关闭RAG增强服务的会话
+    # 关闭RAG增强服务
     try:
+        # 直接创建服务实例而不是从模块导入
         from app.services.rag_enhanced_service import RAGEnhancedService
-        from app.api.rag_chat_routes import rag_enhanced_service
-        if hasattr(rag_enhanced_service, 'close') and callable(rag_enhanced_service.close):
-            await rag_enhanced_service.close()
-            logger.info("RAG增强服务会话已关闭")
+        rag_service = RAGEnhancedService()
+        await rag_service.close()
+        logger.info("RAG增强服务会话已关闭")
     except Exception as e:
         logger.error(f"关闭RAG增强服务会话时出错: {str(e)}")
-    
+        
     # 关闭Redis连接
     try:
         from app.services.redis_service import redis_service
-        if hasattr(redis_service, 'close') and callable(redis_service.close):
-            await redis_service.close()
-            logger.info("Redis连接已关闭")
+        await redis_service.close()
+        logger.info("Redis连接已关闭")
     except Exception as e:
         logger.error(f"关闭Redis连接时出错: {str(e)}")
     

@@ -32,9 +32,11 @@ class SessionRoleManager:
         
         # 如果没有提供Redis客户端，使用连接信息创建
         if self.redis is None:
-            self.redis_url = f"redis://{settings.REDIS_HOST}:{settings.REDIS_PORT}/{settings.REDIS_DB}"
-            if settings.REDIS_PASSWORD:
-                self.redis_url = f"redis://:{settings.REDIS_PASSWORD}@{settings.REDIS_HOST}:{settings.REDIS_PORT}/{settings.REDIS_DB}"
+            # 使用默认Redis DB 0，而不是依赖于配置中的REDIS_DB属性
+            redis_db = getattr(settings, "REDIS_DB", 0)
+            self.redis_url = f"redis://{settings.REDIS_HOST}:{settings.REDIS_PORT}/{redis_db}"
+        if settings.REDIS_PASSWORD:
+                self.redis_url = f"redis://:{settings.REDIS_PASSWORD}@{settings.REDIS_HOST}:{settings.REDIS_PORT}/{redis_db}"
         
         # 初始化日志记录器
         self.logger = logging.getLogger("session_role_manager")
@@ -44,11 +46,16 @@ class SessionRoleManager:
     async def _ensure_redis_connected(self):
         """确保Redis连接已建立"""
         if self.redis is None:
-            self.redis = await Redis.from_url(
-                self.redis_url,
-                encoding="utf-8",
-                decode_responses=True
-            )
+            try:
+                self.redis = await Redis.from_url(
+                    self.redis_url,
+                    encoding="utf-8",
+                    decode_responses=True
+                )
+                self.logger.info("已成功连接到Redis")
+            except Exception as e:
+                self.logger.error(f"连接Redis失败: {str(e)}")
+                raise
     
     async def get_session_roles(self, session_id: str) -> List[Dict[str, Any]]:
         """
@@ -212,11 +219,17 @@ class SessionRoleManager:
                     return False
                     
                 # 更新指定角色的使用次数
+                updated = False
                 for role in roles:
                     if role.get("role_id") == role_id or role.get("id") == role_id:
                         role["usage_count"] = role.get("usage_count", 0) + 1
                         self.logger.info(f"更新角色 {role_id} 使用次数，当前: {role['usage_count']}")
+                        updated = True
                         break
+                
+                if not updated:
+                    self.logger.warning(f"找不到要更新的角色: {role_id}")
+                    return False
                         
                 # 将更新后的角色数据保存回Redis
                 await self.redis.hset(session_key, "roles", json.dumps(roles))
@@ -253,6 +266,40 @@ class SessionRoleManager:
             
             if not role_data:
                 self.logger.warning(f"找不到角色数据: {role_id}")
+                
+                # 回退策略：尝试从会话数据中查找角色
+                self.logger.info(f"尝试从会话数据中查找角色: {role_id}")
+                
+                # 先获取所有会话键
+                session_keys = await self.redis.keys("session:*")
+                
+                for key in session_keys:
+                    session_data = await self.redis.hgetall(key)
+                    if not session_data or "roles" not in session_data:
+                        continue
+                        
+                    try:
+                        roles = json.loads(session_data.get("roles", "[]"))
+                        if not isinstance(roles, list):
+                            continue
+                            
+                        # 查找匹配的角色
+                        for role in roles:
+                            if role.get("role_id") == role_id or role.get("id") == role_id:
+                                self.logger.info(f"在会话 {key} 中找到角色 {role_id}")
+                                
+                                # 保存找到的角色到独立的角色存储中，以便将来使用
+                                try:
+                                    await self.redis.set(role_key, json.dumps(role))
+                                    self.logger.info(f"已将角色 {role_id} 保存到 Redis")
+                                except Exception as e:
+                                    self.logger.warning(f"保存角色到Redis失败: {str(e)}")
+                                    
+                                return role
+                    except json.JSONDecodeError:
+                        continue
+                        
+                self.logger.warning(f"在所有会话中都找不到角色: {role_id}")
                 return None
                 
             # 解析角色数据
@@ -443,7 +490,7 @@ class SessionRoleManager:
             
         except Exception as e:
             error_msg = f"获取会话角色信息时出错: {str(e)}"
-            logger.error(error_msg)
+            self.logger.error(error_msg)
             return False, None, error_msg
             
     async def update_role_usage(self, session_id: str, role_id: str) -> bool:
@@ -530,24 +577,52 @@ class SessionRoleManager:
         
     async def get_role_system_prompt(self, session_id: str, role_id: Optional[str] = None) -> Tuple[bool, str, Optional[str]]:
         """
-        获取角色的系统提示信息
+        获取角色的系统提示
         
         Args:
             session_id: 会话ID
             role_id: 角色ID（可选）
             
         Returns:
-            Tuple[bool, str, Optional[str]]:
+            Tuple[bool, str, Optional[str]]：
                 - 是否成功
                 - 错误消息（如果失败）
-                - 系统提示信息（如果成功）
+                - 系统提示（如果成功）
         """
-        # 获取角色信息
-        success, role_info, error_msg = await self.get_role_for_session(session_id, role_id)
-        if not success:
-            return False, error_msg, None
-            
-        # 获取角色提示信息
-        prompt = get_role_prompt(role_info)
+        # 如果提供了role_id，直接获取角色信息
+        if role_id:
+            role_info = await self.get_role(role_id)
+            if not role_info:
+                # 尝试从会话中获取角色信息
+                success, role_info, error_msg = await self.get_role_for_session(session_id, role_id)
+                if not success:
+                    return False, error_msg, None
+        else:
+            # 否则从会话获取角色信息
+            success, role_info, error_msg = await self.get_role_for_session(session_id, role_id)
+            if not success:
+                return False, error_msg, None
+                
+            # 从角色信息中提取系统提示（尝试多种可能的字段名）
+        system_prompt = None
+        possible_fields = ["system_prompt", "systemPrompt", "prompt", "content", "description"]
         
-        return True, "", prompt 
+        for field in possible_fields:
+            if field in role_info and role_info[field]:
+                system_prompt = role_info[field]
+                self.logger.info(f"从字段 '{field}' 获取到系统提示")
+                break
+            
+        if not system_prompt:
+            # 如果没找到系统提示，使用角色名称和描述构建一个基本提示
+            name = role_info.get("name", role_info.get("role_name", "未知角色"))
+            description = role_info.get("description", "")
+            
+            if description:
+                system_prompt = f"你是{name}。{description}"
+            else:
+                system_prompt = f"你是{name}。请以这个角色的方式回答问题。"
+            
+            self.logger.info(f"未找到系统提示，使用自动生成的提示: {system_prompt[:50]}...")
+            
+        return True, "", system_prompt 

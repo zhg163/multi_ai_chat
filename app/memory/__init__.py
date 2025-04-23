@@ -7,7 +7,7 @@ from app.memory.memory_manager import MemoryManager, get_memory_manager
 from app.memory.schemas import Message, ChatSession
 
 __all__ = [
-    'ShortTermMemory',
+    'ShortTermMemory', 
     'MemoryManager',
     'get_memory_manager',
     'Message',

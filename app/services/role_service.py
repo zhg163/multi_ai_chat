@@ -3,8 +3,14 @@ from typing import List, Dict, Optional, Any, Union, Tuple
 from bson import ObjectId
 import re
 import jieba
+import time
+import uuid
+import asyncio
+import logging
 
 from app.models.role import Role
+
+logger = logging.getLogger(__name__)
 
 class RoleService:
     """角色管理服务，提供角色CRUD操作"""
@@ -313,6 +319,85 @@ class RoleService:
         if matched_roles:
             return matched_roles[0]
         return None
+        
+    @staticmethod
+    async def match_role_for_message(message: str, session_id: Optional[str] = None) -> Dict[str, Any]:
+        """
+        匹配最适合的角色并返回结果
+
+        Args:
+            message: 用户消息
+            session_id: 可选的会话ID
+
+        Returns:
+            Dict: 匹配结果，包含成功状态、角色信息、匹配原因和错误信息
+        """
+        start_time = time.time()
+        request_id = str(uuid.uuid4())
+        logger.info(f"[{request_id}] 开始角色匹配, 消息长度: {len(message)}, 会话ID: {session_id}")
+        
+        try:
+            # 验证消息
+            if not message or not isinstance(message, str):
+                logger.error(f"[{request_id}] 无效的消息格式")
+                return {"success": False, "error": "无效的消息格式"}
+                
+            # 执行角色匹配
+            kw_extract_start = time.time()
+            logger.debug(f"[{request_id}] 开始从消息中提取关键词")
+            try:
+                keywords = await asyncio.wait_for(
+                    RoleService.extract_keywords_from_text(message, top_k=5),
+                    timeout=5.0
+                )
+                kw_extract_time = time.time() - kw_extract_start
+                logger.debug(f"[{request_id}] 关键词提取完成，耗时: {kw_extract_time:.4f}秒, 关键词: {keywords}")
+            except asyncio.TimeoutError:
+                logger.error(f"[{request_id}] 关键词提取超时")
+                return {"success": False, "error": "关键词提取超时"}
+            except Exception as e:
+                logger.error(f"[{request_id}] 关键词提取失败: {str(e)}")
+                return {"success": False, "error": f"关键词提取失败: {str(e)}"}
+                
+            # 根据关键词匹配角色
+            match_start = time.time()
+            logger.debug(f"[{request_id}] 开始根据关键词匹配角色")
+            matched_roles = await RoleService.match_roles_by_keywords(keywords, top_k=3)
+            match_time = time.time() - match_start
+            logger.debug(f"[{request_id}] 角色匹配完成，耗时: {match_time:.4f}秒, 匹配到 {len(matched_roles)} 个角色")
+            
+            # 处理匹配结果
+            if not matched_roles:
+                logger.warning(f"[{request_id}] 未找到匹配的角色")
+                return {"success": False, "error": "未找到匹配的角色"}
+                
+            # 获取最佳匹配角色
+            best_match = matched_roles[0]
+            
+            # 构建匹配原因
+            match_reason = "根据以下关键词匹配: "
+            for kw in keywords[:3]:
+                if kw in best_match.get("matched_keywords", []):
+                    match_reason += f"「{kw}」"
+                    
+            logger.info(f"[{request_id}] 匹配成功，最佳角色: {best_match.get('name')}, 匹配原因: {match_reason}")
+            
+            # 构建完整返回结果
+            result = {
+                "success": True,
+                "role": best_match,
+                "match_reason": match_reason,
+                "matched_keywords": best_match.get("matched_keywords", [])
+            }
+            
+            total_time = time.time() - start_time
+            logger.info(f"[{request_id}] 角色匹配过程完成，总耗时: {total_time:.4f}秒")
+            return result
+            
+        except Exception as e:
+            total_time = time.time() - start_time
+            logger.error(f"[{request_id}] 角色匹配过程中出错，耗时: {total_time:.4f}秒, 错误: {str(e)}", exc_info=True)
+            return {"success": False, "error": str(e)}
         
     @staticmethod
     async def extract_keywords_from_text(text: str, top_k: int = 10) -> List[str]:

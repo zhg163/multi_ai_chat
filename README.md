@@ -137,3 +137,5 @@ kill -9 $(lsof -ti:8000)
 session使用custom_session.py
 
 ps -ef | grep python | grep uvicorn | grep -v grep
+
+pkill -f "uvicorn main:app"

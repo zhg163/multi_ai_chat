@@ -53,7 +53,7 @@ class TwoPhaseService:
 
 用户消息: "{message}"
 
-请分析用户消息并选择最合适的角色。返回JSON格式如下:
+请分析用户消息与角色描述进行匹配并选择最合适的角色。返回JSON格式如下:
 {{
   "selected_role_index": 角色索引(1到{len(roles)}),
   "confidence_score": 置信度(0.0到1.0),

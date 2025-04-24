@@ -7,14 +7,23 @@
 import os
 import logging
 import logging.handlers
-from dotenv import load_dotenv
-from datetime import datetime
 import time
+import traceback
+import uuid
+import json
+from datetime import datetime
 from typing import Dict
-from fastapi import FastAPI, HTTPException, Request, Response, Body
+
+from dotenv import load_dotenv
+from fastapi import FastAPI, HTTPException, Body, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
+from fastapi.exceptions import RequestValidationError
+from fastapi import status
+from starlette.requests import Request
+from starlette.responses import Response
+from app.services.role_matching_service import role_matching_service
 
 # 获取项目根目录
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -28,7 +37,7 @@ os.makedirs(logs_dir, exist_ok=True)
 def setup_logging():
     # 创建根日志记录器
     root_logger = logging.getLogger()
-    root_logger.setLevel(logging.INFO)
+    root_logger.setLevel(logging.DEBUG)
     
     # 清除已有的处理器
     if root_logger.handlers:
@@ -39,7 +48,7 @@ def setup_logging():
     
     # 控制台处理器
     console_handler = logging.StreamHandler()
-    console_handler.setLevel(logging.INFO)
+    console_handler.setLevel(logging.DEBUG)
     console_handler.setFormatter(formatter)
     
     # 文件处理器 - 每天一个文件，保留30天
@@ -50,9 +59,20 @@ def setup_logging():
     file_handler.setLevel(logging.INFO)
     file_handler.setFormatter(formatter)
     
+    # 调试日志文件 - 可捕获所有级别的日志
+    debug_log_file = os.path.join(logs_dir, "debug.log")
+    debug_file_handler = logging.handlers.TimedRotatingFileHandler(
+        debug_log_file, when='midnight', interval=1, backupCount=7, encoding='utf-8'
+    )
+    debug_file_handler.setLevel(logging.DEBUG)
+    debug_file_handler.setFormatter(logging.Formatter(
+        '%(asctime)s - %(name)s - %(levelname)s - [%(filename)s:%(lineno)d] - %(message)s'
+    ))
+    
     # 添加处理器到根日志记录器
     root_logger.addHandler(console_handler)
     root_logger.addHandler(file_handler)
+    root_logger.addHandler(debug_file_handler)
     
     # 设置特定模块的日志级别
     logging.getLogger('uvicorn').setLevel(logging.WARNING)
@@ -60,7 +80,12 @@ def setup_logging():
     
     # 配置应用自定义日志记录器
     app_logger = logging.getLogger('app')
-    app_logger.setLevel(logging.INFO)
+    app_logger.setLevel(logging.DEBUG)  # 修改为DEBUG级别
+    
+    # 配置FastAPI、Starlette和Pydantic的日志级别
+    logging.getLogger('fastapi').setLevel(logging.DEBUG)
+    logging.getLogger('starlette').setLevel(logging.DEBUG)
+    logging.getLogger('pydantic').setLevel(logging.DEBUG)
     
     return app_logger
 
@@ -82,11 +107,6 @@ if os.path.exists(env_path):
 else:
     logger.warning(f"未找到.env文件: {env_path}")
 
-from fastapi import FastAPI, HTTPException, Request, Response
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
-from fastapi.responses import HTMLResponse, RedirectResponse
-
 # 创建FastAPI实例
 app = FastAPI(
     title="多AI聊天系统",
@@ -102,6 +122,235 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# 添加一个中间件来禁用特定路由的验证
+@app.middleware("http")
+async def handle_test_routes(request: Request, call_next):
+    """直接处理测试路由，完全绕过FastAPI的路由机制"""
+    # 测试路由处理映射
+    test_route_handlers = {
+        "/api/llm/chatrag/test-role-select": "app.api.test_routes.test_role_select.test_role_select",
+        "/api/llm/chatrag/test-generate": "app.api.test_routes.test_generate.test_generate",
+        "/api/llm/chatrag/role-select": None  # 直接在此处理，不需要外部模块
+    }
+    
+    # 如果是 role-select 路由，需要直接处理
+    if request.url.path == "/api/llm/chatrag/role-select" and request.method == "POST":
+        try:
+            # 读取请求体
+            body = await request.body()
+            data = json.loads(body)
+            
+            # 提取request_data
+            request_data = data.get("request_data", {})
+            
+            # 提取必要的参数
+            messages = request_data.get("messages", [])
+            session_id = request_data.get("session_id")
+            user_id = request_data.get("user_id")
+            auto_role_match = request_data.get("auto_role_match", False)
+            
+            # 提取最后一条用户消息
+            user_message = ""
+            for msg in reversed(messages):
+                if msg.get("role") == "user":
+                    user_message = msg.get("content", "").strip()
+                    break
+            
+            if not user_message:
+                return JSONResponse(
+                    status_code=400,
+                    content={"error": "找不到用户消息"}
+                )
+            
+            # 调用RoleMatchingService的find_matching_roles方法
+            matching_roles = await role_matching_service.find_matching_roles(
+                message=user_message,
+                session_id=session_id,
+                limit=3  # 可以根据需要调整
+            )
+        except Exception as e:
+            logger.error(f"处理role-select路由时出错: {str(e)}")
+            
+            
+    # 处理其他测试路由
+    elif request.url.path in test_route_handlers and test_route_handlers[request.url.path] is not None:
+        try:
+            logger.debug(f"直接处理测试路由: {request.url.path}")
+            
+            # 读取并缓存请求体
+            body = await request.body()
+            
+            # 创建新的请求对象，用于多次读取body
+            async def new_receive():
+                return {"type": "http.request", "body": body}
+            request._receive = new_receive
+            
+            # 动态导入处理函数
+            handler_path = test_route_handlers[request.url.path]
+            module_path, function_name = handler_path.rsplit(".", 1)
+            
+            import importlib
+            module = importlib.import_module(module_path)
+            handler_function = getattr(module, function_name)
+            
+            # 调用处理函数
+            response = await handler_function(request)
+            return response
+        except Exception as e:
+            logger.error(f"测试路由处理错误: {str(e)}", exc_info=True)
+            return JSONResponse(
+                status_code=500,
+                content={"error": f"测试路由处理错误: {str(e)}"}
+            )
+    
+    # 非测试路由正常处理
+    return await call_next(request)
+
+@app.middleware("http")
+async def disable_validation_for_role_select(request: Request, call_next):
+    """禁用特定路由的请求验证"""
+    # 无需验证的路由列表
+    no_validation_routes = [
+        "/api/llm/chatrag/role-select",
+        "/api/llm/chatrag/test-role-select",
+        "/api/llm/chatrag/test-generate"
+    ]
+    
+    try:
+        # 检查是否为需要跳过验证的路由
+        if request.url.path in no_validation_routes:
+            logger.info(f"禁用验证: {request.url.path}")
+            
+            # 标记为不需要验证
+            request.state.skip_validation = True
+            
+            # 检查请求方法
+            if request.method in ["POST", "PUT", "PATCH"]:
+                # 读取请求体并缓存以便多次使用
+                try:
+                    # 读取请求体并记录大小
+                    body_bytes = await request.body()
+                    body_size = len(body_bytes)
+                    logger.info(f"已读取请求体: {body_size} 字节")
+                    
+                    # 如果请求体超过1MB，记录一个警告
+                    max_size = 1 * 1024 * 1024  # 1MB
+                    if body_size > max_size:
+                        logger.warning(f"请求体过大: {body_size} 字节 > {max_size} 字节 (1MB)")
+                    
+                    # 尝试解析为JSON，但只用于日志记录
+                    try:
+                        body_str = body_bytes.decode('utf-8')
+                        body_json = json.loads(body_str)
+                        
+                        # 记录是否包含特定字段，但不记录完整内容
+                        has_request_data = "request_data" in body_json
+                        has_messages = "messages" in body_json if not has_request_data else "messages" in body_json["request_data"]
+                        
+                        logger.info(f"请求体格式: has_request_data={has_request_data}, has_messages={has_messages}")
+                    except (UnicodeDecodeError, json.JSONDecodeError) as e:
+                        logger.warning(f"无法解析请求体为JSON: {str(e)}")
+                    
+                    # 创建一个新的请求对象，允许多次读取body
+                    async def receive():
+                        return {"type": "http.request", "body": body_bytes}
+                    
+                    request._receive = receive
+                    logger.info(f"已缓存请求体，可多次读取")
+                    
+                except Exception as e:
+                    logger.error(f"读取请求体时出错: {str(e)}")
+            
+            logger.info(f"路由 '{request.url.path}' 已跳过验证")
+        
+        return await call_next(request)
+    except Exception as e:
+        logger.error(f"中间件处理错误: {str(e)}")
+        return JSONResponse(
+            status_code=500,
+            content={"error": f"中间件处理错误: {str(e)}"}
+        )
+
+# 修改验证错误处理器
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    """处理请求验证错误"""
+    # 检查是否应跳过验证
+    if hasattr(request.state, "skip_validation") and request.state.skip_validation:
+        logger.info(f"已检测到跳过验证标记，允许请求继续处理: {request.url.path}")
+        # 让请求继续到路由处理函数
+        # 但这里无法直接调用路由处理函数，只能告诉用户修改请求格式
+        return JSONResponse(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            content={
+                "detail": "此路由禁用了验证，但验证仍然失败。请检查请求格式或使用test版本的路由。",
+                "path": request.url.path,
+                "skip_validation": True,
+                "validation_errors": exc.errors()
+            }
+        )
+    
+    # 获取错误详情
+    error_id = str(uuid.uuid4())
+    error_time = datetime.now().isoformat()
+    error_details = exc.errors()
+    
+    # 获取请求信息
+    headers = dict(request.headers)
+    # 移除敏感信息
+    headers.pop("authorization", None)
+    headers.pop("cookie", None)
+    
+    # 构建错误上下文
+    error_context = {
+        "error_id": error_id,
+        "timestamp": error_time,
+        "path": request.url.path,
+        "method": request.method,
+        "client_host": request.client.host if request.client else None,
+        "headers": headers,
+        "validation_errors": error_details
+    }
+    
+    # 在开发环境中记录更多信息
+    if os.getenv("ENVIRONMENT", "development") == "development":
+        try:
+            body = await request.body()
+            if len(body) < 1024 * 10:  # 只记录小于10KB的请求体
+                error_context["request_body"] = body.decode()
+        except Exception as e:
+            logger.warning(f"无法读取请求体: {str(e)}")
+    
+    # 记录到专门的验证错误日志文件
+    validation_log_file = os.path.join(logs_dir, "validation_errors.log")
+    with open(validation_log_file, "a", encoding="utf-8") as f:
+        json.dump({
+            "timestamp": error_time,
+            "error_context": error_context
+        }, f, ensure_ascii=False)
+        f.write("\n")
+    
+    # 记录验证错误
+    logger.warning(
+        f"请求验证失败 [ID: {error_id}]:\n"
+        f"路径: {request.url.path}\n"
+        f"方法: {request.method}\n"
+        f"客户端: {request.client.host if request.client else 'unknown'}\n"
+        f"时间: {error_time}\n"
+        f"错误详情: {json.dumps(error_details, ensure_ascii=False)}"
+    )
+    
+    # 返回错误响应
+    return JSONResponse(
+        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        content={
+            "error_id": error_id,
+            "message": "请求验证失败",
+            "detail": error_details,
+            "timestamp": error_time
+        }
+    )
 
 # 导入嵌入服务
 try:
@@ -174,11 +423,18 @@ except ImportError as e:
 
 # 导入RAG聊天路由
 try:
-    from app.api.rag_chat_routes import router as rag_chat_router
-    app.include_router(rag_chat_router)
-    logger.info("RAG增强聊天路由已加载")
+    from app.api.rag_chat_routes import router as rag_router
+    # 确保测试路由被正确加载
+    for route in rag_router.routes:
+        if route.path == "/api/llm/chatrag/test-role-select" or route.path == "/api/llm/chatrag/test-generate":
+            # 保留测试路由的schema
+            route.include_in_schema = True
+            logger.info(f"保留测试路由schema: {route.path}")
+    
+    app.include_router(rag_router)
+    logger.info("RAG聊天路由已加载")
 except ImportError as e:
-    logger.error(f"无法导入RAG增强聊天路由: {str(e)}")
+    logger.error(f"无法导入RAG聊天路由: {str(e)}")
 
 # 导入用户路由
 try:
@@ -558,46 +814,125 @@ async def test_routes():
 # 添加一个HTTP请求日志记录中间件，帮助调试路由问题
 @app.middleware("http")
 async def log_requests(request: Request, call_next):
-    """记录每个HTTP请求的详细信息，帮助调试404错误"""
+    """记录所有HTTP请求的中间件"""
+    # 生成请求ID
+    request_id = str(uuid.uuid4())
+    request.headers.__dict__["_list"].append(
+        (b"x-request-id", request_id.encode())
+    )
+    
+    # 记录请求开始
+    logger.info(f"请求开始: {request.method} {request.url.path} [ID: {request_id}]")
     start_time = time.time()
-    path = request.url.path
-    method = request.method
     
-    # 记录请求详情
-    logger.info(f"请求开始: {method} {path}")
+    # 为POST、PUT和PATCH请求保存请求体
+    request_body = None
+    if request.method in ["POST", "PUT", "PATCH"]:
+        try:
+            # 读取并缓存请求体
+            body_bytes = await request.body()
+            # 创建一个Request对象的副本，使用读取过的body
+            async def receive():
+                return {"type": "http.request", "body": body_bytes}
+            
+            request._receive = receive
+            
+            # 尝试将请求体解析为JSON并记录（最多1000个字符）
+            try:
+                body_str = body_bytes.decode('utf-8')
+                if len(body_str) > 1000:
+                    logger.debug(f"请求体 [ID: {request_id}]: {body_str[:1000]}... (已截断)")
+                else:
+                    logger.debug(f"请求体 [ID: {request_id}]: {body_str}")
+                request_body = body_str
+            except UnicodeDecodeError:
+                logger.debug(f"请求体 [ID: {request_id}]: 无法解码为UTF-8")
+        except Exception as e:
+            logger.warning(f"读取请求体时出错 [ID: {request_id}]: {str(e)}")
     
-    # 如果是API请求，记录更多详情
-    if path.startswith("/api/"):
-        # 记录注册路由信息
-        routes_info = []
-        for route in app.routes:
-            if hasattr(route, "path"):
-                route_methods = list(getattr(route, "methods", ["GET"]))
-                if route_methods and method in route_methods:
-                    routes_info.append(f"{route.path} [{','.join(route_methods)}]")
+    try:
+        # 处理请求
+        response = await call_next(request)
         
-        # if routes_info:
-        #     logger.info(f"可能匹配的路由: {routes_info}")
-    
-    # 执行请求
-    response = await call_next(request)
-    
-    # 计算处理时间并记录响应状态
-    process_time = time.time() - start_time
-    logger.info(f"请求完成: {method} {path} - 状态: {response.status_code} - 处理时间: {process_time:.4f}秒")
-    
-    # 如果是404错误，记录更多信息帮助调试
-    if response.status_code == 404 and path.startswith("/api/"):
-        logger.warning(f"404 NOT FOUND: {method} {path}")
-        # 记录所有API路由，帮助判断是否有拼写错误
-        api_routes = []
-        for route in app.routes:
-            if hasattr(route, "path") and "/api/" in route.path:
-                api_routes.append(f"{route.path} [{','.join(getattr(route, 'methods', ['GET']))}]")
-        logger.warning(f"全部API路由: {api_routes}")
-    
-    response.headers["X-Process-Time"] = str(process_time)
-    return response
+        # 计算处理时间
+        process_time = time.time() - start_time
+        response.headers["X-Process-Time"] = str(process_time)
+        response.headers["X-Request-ID"] = request_id
+        
+        # 详细记录422错误（验证错误）
+        if response.status_code == 422:
+            logger.warning(f"验证错误: {request.method} {request.url.path} - 状态: 422 - 耗时: {process_time:.4f}s [ID: {request_id}]")
+            
+            # 记录请求体（如果已保存）
+            if request_body:
+                try:
+                    # 尝试将请求体解析为JSON以便更好地格式化
+                    import json
+                    body_json = json.loads(request_body)
+                    logger.warning(f"422错误请求体 [ID: {request_id}]: {json.dumps(body_json, ensure_ascii=False, indent=2)}")
+                except:
+                    # 如果不是有效的JSON，则记录原始文本
+                    logger.warning(f"422错误请求体 [ID: {request_id}]: {request_body}")
+            
+            # 尝试读取验证错误详情
+            try:
+                response_body = b""
+                async for chunk in response.body_iterator:
+                    response_body += chunk
+                
+                # 重新设置响应体迭代器
+                async def mock_body_iterator():
+                    yield response_body
+                response.body_iterator = mock_body_iterator()
+                
+                # 记录响应体（包含验证错误详情）
+                try:
+                    error_str = response_body.decode('utf-8')
+                    import json
+                    error_json = json.loads(error_str)
+                    logger.warning(f"422错误响应 [ID: {request_id}]: {json.dumps(error_json, ensure_ascii=False, indent=2)}")
+                    
+                    # 写入专门的验证错误日志文件
+                    validation_log_path = os.path.join(logs_dir, "validation_errors.log")
+                    with open(validation_log_path, "a", encoding="utf-8") as f:
+                        f.write(f"\n--- 验证错误 [{datetime.now().isoformat()}] [ID: {request_id}] ---\n")
+                        f.write(f"URL: {request.method} {request.url}\n")
+                        f.write(f"请求体: {request_body}\n")
+                        f.write(f"错误详情: {json.dumps(error_json, ensure_ascii=False, indent=2)}\n")
+                        f.write("-" * 80 + "\n")
+                except:
+                    logger.warning(f"422错误响应 [ID: {request_id}]: 无法解析JSON响应")
+            except Exception as e:
+                logger.warning(f"读取验证错误详情时出错 [ID: {request_id}]: {str(e)}")
+        
+        # 根据状态码使用不同日志级别
+        if response.status_code >= 500:
+            logger.error(f"请求完成: {request.method} {request.url.path} - 状态: {response.status_code} - 耗时: {process_time:.4f}s [ID: {request_id}]")
+        elif response.status_code >= 400 and response.status_code != 422:  # 422已单独处理
+            logger.warning(f"请求完成: {request.method} {request.url.path} - 状态: {response.status_code} - 耗时: {process_time:.4f}s [ID: {request_id}]")
+        else:
+            logger.info(f"请求完成: {request.method} {request.url.path} - 状态: {response.status_code} - 耗时: {process_time:.4f}s [ID: {request_id}]")
+        
+        return response
+    except Exception as e:
+        # 记录异常
+        process_time = time.time() - start_time
+        logger.error(f"请求错误: {request.method} {request.url.path} - 耗时: {process_time:.4f}s - 错误: {str(e)} [ID: {request_id}]")
+        logger.error(traceback.format_exc())
+        
+        # 如果有请求体，记录它以帮助调试
+        if request_body:
+            logger.error(f"错误请求的请求体 [ID: {request_id}]: {request_body}")
+        
+        # 返回500错误
+        return JSONResponse(
+            status_code=500, 
+            content={
+                "detail": "服务器内部错误",
+                "message": str(e),
+                "request_id": request_id
+            }
+        )
 
 # 添加会话管理页面路由
 @app.get("/session-manager", response_class=HTMLResponse)

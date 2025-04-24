@@ -6,137 +6,182 @@ import asyncio
 import uuid
 import logging
 from redis.asyncio import Redis
-from typing import Optional
+from typing import Optional, Any
 
 logger = logging.getLogger(__name__)
 
 class RedisLock:
-    """Simple distributed lock using Redis"""
+    """
+    基于Redis的分布式锁实现
     
-    def __init__(self, redis_client: Redis, lock_name: str, expire_seconds: int = 30):
+    提供异步操作和上下文管理器支持
+    """
+    
+    def __init__(self, redis_client, lock_name, expire_seconds=30, owner=None):
         """
-        Initialize a Redis lock
+        初始化锁对象
         
         Args:
-            redis_client: Redis client instance
-            lock_name: Name of the lock (used as Redis key)
-            expire_seconds: Lock expiration time in seconds
+            redis_client: Redis客户端实例
+            lock_name: 锁的名称/键
+            expire_seconds: 锁的过期时间（秒）
+            owner: 锁的拥有者标识（默认生成UUID）
         """
         self.redis = redis_client
         self.lock_name = lock_name
-        self.lock_value = str(uuid.uuid4())
         self.expire_seconds = expire_seconds
-        self._locked = False
+        self.owner = owner or str(uuid.uuid4())
+        self._acquired = False
+        self._refresh_task = None
     
-    async def acquire(self, retry_count: int = 3, retry_delay: float = 0.5) -> bool:
+    async def acquire(self, retry_count=3, retry_delay=0.5):
         """
-        Acquire the lock with retries
+        尝试获取锁，支持重试
         
         Args:
-            retry_count: Number of acquisition attempts
-            retry_delay: Delay between retries in seconds
+            retry_count: 重试次数
+            retry_delay: 重试延迟（秒）
             
         Returns:
-            True if lock acquired, False otherwise
+            bool: 是否成功获取锁
         """
         for attempt in range(retry_count):
             acquired = await self.redis.set(
-                self.lock_name, 
-                self.lock_value,
-                nx=True,  # Only set if key doesn't exist
-                ex=self.expire_seconds
+                self.lock_name, self.owner, 
+                nx=True, ex=self.expire_seconds
             )
             
             if acquired:
-                self._locked = True
-                logger.debug(f"Lock acquired: {self.lock_name}")
+                self._acquired = True
+                # 启动自动刷新任务延长锁寿命
+                self._start_refresh_task()
+                logger.info(f"获取锁成功: {self.lock_name} (所有者: {self.owner})")
                 return True
-                
+            
             if attempt < retry_count - 1:
-                logger.debug(f"Lock acquisition failed, retrying in {retry_delay}s: {self.lock_name}")
+                logger.warning(f"获取锁失败，尝试重试 ({attempt+1}/{retry_count}): {self.lock_name}")
                 await asyncio.sleep(retry_delay)
         
-        logger.warning(f"Failed to acquire lock after {retry_count} attempts: {self.lock_name}")
+        logger.error(f"所有重试都失败，无法获取锁: {self.lock_name}")
         return False
     
-    async def release(self) -> bool:
+    async def release(self):
         """
-        Release the lock if we own it
+        释放锁，只允许所有者释放
         
         Returns:
-            True if lock released successfully, False otherwise
+            bool: 是否成功释放锁
         """
-        if not self._locked:
-            return True
+        if not self._acquired:
+            logger.warning(f"尝试释放未获取的锁: {self.lock_name}")
+            return False
         
-        # For Redis versions that don't support eval with keys/args parameters
-        try:    
-            # Try direct delete - less safe but more compatible
-            current_value = await self.redis.get(self.lock_name)
-            if current_value == self.lock_value:
-                await self.redis.delete(self.lock_name)
-                self._locked = False
-                logger.debug(f"Lock released: {self.lock_name}")
+        # 停止自动刷新任务
+        self._stop_refresh_task()
+        
+        # 使用Lua脚本确保只有锁的所有者可以释放锁
+        script = """
+        if redis.call('get', KEYS[1]) == ARGV[1] then
+            return redis.call('del', KEYS[1])
+        else
+            return 0
+        end
+        """
+        
+        try:
+            result = await self.redis.eval(script, 1, self.lock_name, self.owner)
+            if result:
+                self._acquired = False
+                logger.info(f"成功释放锁: {self.lock_name} (所有者: {self.owner})")
                 return True
             else:
-                logger.warning(f"Failed to release lock (not owner): {self.lock_name}")
+                logger.warning(f"锁不存在或不属于此所有者: {self.lock_name} (所有者: {self.owner})")
                 return False
-                
         except Exception as e:
-            logger.error(f"Error releasing lock: {str(e)}")
+            logger.error(f"释放锁时出错: {str(e)}")
+            self._acquired = False
             return False
     
-    async def refresh(self) -> bool:
+    async def refresh(self):
         """
-        Refresh the lock's expiration time
+        刷新锁的过期时间
         
         Returns:
-            True if lock refreshed successfully, False otherwise
+            bool: 是否成功刷新
         """
-        if not self._locked:
+        if not self._acquired:
             return False
-            
+        
+        # 使用Lua脚本确保只有所有者可以刷新
+        script = """
+        if redis.call('get', KEYS[1]) == ARGV[1] then
+            return redis.call('expire', KEYS[1], ARGV[2])
+        else
+            return 0
+        end
+        """
+        
         try:
-            # For Redis versions that don't support eval with keys/args parameters
-            # Try direct expire - less safe but more compatible
-            current_value = await self.redis.get(self.lock_name)
-            if current_value == self.lock_value:
-                await self.redis.expire(self.lock_name, self.expire_seconds)
-                logger.debug(f"Lock refreshed: {self.lock_name}")
+            result = await self.redis.eval(
+                script, 1, self.lock_name, self.owner, self.expire_seconds
+            )
+            
+            if result:
+                logger.debug(f"刷新锁过期时间: {self.lock_name}")
                 return True
             else:
-                logger.warning(f"Failed to refresh lock (not owner): {self.lock_name}")
-                self._locked = False
+                logger.warning(f"刷新锁失败，锁可能已被释放: {self.lock_name}")
+                self._acquired = False
                 return False
-                
         except Exception as e:
-            logger.error(f"Error refreshing lock: {str(e)}")
-            self._locked = False
+            logger.error(f"刷新锁时出错: {str(e)}")
             return False
+    
+    def _start_refresh_task(self):
+        """启动自动刷新任务"""
+        async def refresh_periodically():
+            try:
+                while self._acquired:
+                    # 在过期时间的一半时刷新
+                    await asyncio.sleep(self.expire_seconds / 2)
+                    if self._acquired:
+                        await self.refresh()
+            except asyncio.CancelledError:
+                pass
+            except Exception as e:
+                logger.error(f"锁刷新任务出错: {str(e)}")
+        
+        self._refresh_task = asyncio.create_task(refresh_periodically())
+    
+    def _stop_refresh_task(self):
+        """停止自动刷新任务"""
+        if self._refresh_task:
+            self._refresh_task.cancel()
+            self._refresh_task = None
     
     async def __aenter__(self):
-        """Async context manager support for acquiring the lock"""
+        """异步上下文管理器支持"""
         await self.acquire()
         return self
     
-    async def __aexit__(self, exc_type, exc_val, exc_tb):
-        """Async context manager support for releasing the lock"""
+    async def __aexit__(self, exc_type, exc, tb):
+        """异步上下文管理器退出时释放锁"""
         await self.release()
-        
-async def obtain_lock(redis_client, lock_name, expire_seconds=30):
+
+
+async def obtain_lock(redis_client, lock_key, expire_seconds=30):
     """
-    Helper function to obtain a Redis lock
+    获取锁的辅助函数
     
     Args:
-        redis_client: Redis client instance
-        lock_name: Name of the lock
-        expire_seconds: Lock expiration time in seconds
+        redis_client: Redis客户端
+        lock_key: 锁名称
+        expire_seconds: 过期时间（秒）
         
     Returns:
-        A RedisLock instance
+        Optional[RedisLock]: 获取的锁对象，获取失败返回None
     """
-    lock = RedisLock(redis_client, lock_name, expire_seconds)
-    success = await lock.acquire()
-    if not success:
-        return None
-    return lock 
+    lock = RedisLock(redis_client, lock_key, expire_seconds)
+    if await lock.acquire():
+        return lock
+    return None 

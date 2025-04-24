@@ -33,6 +33,7 @@ class LLMProvider(str, Enum):
     DEEPSEEK = "deepseek"
     ZHIPU = "zhipu"
     OPENAI = "openai"
+    DEFAULT = "default"  # 系统默认提供商
 
 class MessageRole(str, Enum):
     """消息角色枚举"""
@@ -79,6 +80,10 @@ class LLMConfig:
             "presence_penalty": self.presence_penalty,
             "stop": self.stop
         }
+        
+    def is_default_model(self) -> bool:
+        """检查是否使用默认模型"""
+        return self.model_name == "default"
 
 @dataclass
 class LLMResponse:
@@ -121,6 +126,9 @@ class LLMService:
         """
         if isinstance(config, dict):
             provider = config.get("provider", "deepseek")
+            # 处理 "default" 的情况，使用系统默认提供商
+            if provider == "default" or provider == LLMProvider.DEFAULT:
+                return self.default_config.provider.value
             # 如果provider是枚举，获取其值
             if hasattr(provider, 'value'):
                 return provider.value
@@ -128,6 +136,9 @@ class LLMService:
         else:
             # 处理LLMConfig对象
             provider = config.provider if hasattr(config, 'provider') else None
+            # 处理 "default" 的情况，使用系统默认提供商
+            if provider == "default" or provider == LLMProvider.DEFAULT:
+                return self.default_config.provider.value
             # 如果provider是枚举，获取其值
             if hasattr(provider, 'value'):
                 return provider.value
@@ -523,7 +534,7 @@ class LLMService:
     @backoff.on_exception(
         backoff.expo,
         (aiohttp.ClientError, asyncio.TimeoutError, ValueError),
-        max_tries=3,
+        max_tries=1,
         factor=2
     )
     async def _make_api_request(self, endpoint: str, headers: Dict[str, str], data: Dict) -> aiohttp.ClientResponse:
@@ -560,7 +571,7 @@ class LLMService:
                 async with session.post(endpoint, headers=headers, json=data) as response:
                     logger.info(f"收到状态码: {response.status}")
                     
-                if response.status != 200:
+                    if response.status != 200:
                         error_text = await response.text()
                         logger.error(f"请求失败详情 - 状态码: {response.status}, 内容: {error_text[:500]}")
                         logger.error(f"请求失败详情 - 请求头: {headers}")
@@ -568,7 +579,7 @@ class LLMService:
                         response.raise_for_status()  # 抛出错误以触发重试机制
                     
                     # 创建响应内容副本，以便在会话关闭后使用
-                        cloned_response = aiohttp.ClientResponse(
+                    cloned_response = aiohttp.ClientResponse(
                         response.method,
                         response.url,
                         writer=None,
@@ -580,13 +591,13 @@ class LLMService:
                         session=None
                     )
                     
-                        # 复制响应的关键属性
-                        cloned_response.status = response.status
-                        cloned_response.reason = response.reason
-                        cloned_response.headers = response.headers.copy()
-                        cloned_response._body = await response.read()
+                    # 复制响应的关键属性
+                    cloned_response.status = response.status
+                    cloned_response.reason = response.reason
+                    cloned_response.headers = response.headers.copy()
+                    cloned_response._body = await response.read()
                     
-                        return cloned_response
+                    return cloned_response
                 
         except aiohttp.ClientError as e:
             logger.error(f"API请求客户端错误: {str(e)}")
@@ -597,7 +608,7 @@ class LLMService:
         except Exception as e:
             logger.error(f"API请求未预期错误: {str(e)}", exc_info=True)
             raise ValueError(f"API请求失败: {str(e)}")
-    
+            
     @backoff.on_exception(
         backoff.expo,
         (aiohttp.ClientError, asyncio.TimeoutError, ValueError),
@@ -673,12 +684,32 @@ class LLMService:
                 data=data
             )
             
-            # 解析响应
-            return self._parse_response(await response.json(), used_config)
+            # 检查响应是否为None
+            if response is None:
+                logger.error("API响应为None，无法处理")
+                error_msg = "获取API响应失败，服务可能暂时不可用"
+                return LLMResponse(content=error_msg, finish_reason="error")
+            
+            # 安全地解析JSON响应
+            try:
+                response_json = await response.json()
+                return self._parse_response(response_json, used_config)
+            except (json.JSONDecodeError, aiohttp.ContentTypeError) as json_err:
+                logger.error(f"解析响应JSON时出错: {str(json_err)}")
+                # 尝试读取原始响应内容作为备用
+                try:
+                    response_text = await response.text()
+                    logger.error(f"原始响应内容: {response_text[:500]}")
+                    error_msg = f"无法解析API响应: {str(json_err)}"
+                except Exception as text_err:
+                    logger.error(f"读取响应内容时出错: {str(text_err)}")
+                    error_msg = "无法读取或解析API响应"
+                
+                return LLMResponse(content=error_msg, finish_reason="error")
             
         except Exception as e:
-            logger.error(f"生成回复时出错: {str(e)}")
-            raise
+            logger.error(f"生成回复时出错: {str(e)}", exc_info=True)
+            return LLMResponse(content=f"生成响应时出错: {str(e)}", finish_reason="error")
     
     async def generate_stream_response(self, messages: List[Union[Dict, Message]], config: Optional[Dict] = None) -> AsyncGenerator[StreamResponse, None]:
         """
@@ -1292,89 +1323,95 @@ class LLMService:
                 }
 
     def _get_request_config(self, config: Optional[LLMConfig], provider: Optional[LLMProvider], model: Optional[str]) -> LLMConfig:
-        """
-        获取请求配置
+        """获取请求配置，处理默认值和覆盖值"""
+        # 使用默认配置作为基础
+        result_config = self.default_config
         
-        Args:
-            config: LLM配置
-            provider: 提供商
-            model: 模型名称
-            
-        Returns:
-            LLM配置对象
-        """
+        # 如果提供了配置，应用它
         if config:
-            # 如果提供了config，使用它
-            if provider:
+            # 处理provider（如果为default，使用默认提供商）
+            if config.provider == LLMProvider.DEFAULT:
+                provider_value = result_config.provider
+            else:
+                provider_value = config.provider
+            
+            # 处理model_name（如果为default，使用默认模型）
+            if config.model_name == "default":
+                model_name_value = result_config.model_name
+            else:
+                model_name_value = config.model_name
+            
+            # 创建新配置对象
+            result_config = LLMConfig(
+                provider=provider_value,
+                model_name=model_name_value,
+                api_key=config.api_key or result_config.api_key,
+                temperature=config.temperature,
+                max_tokens=config.max_tokens,
+                top_p=config.top_p,
+                frequency_penalty=config.frequency_penalty,
+                presence_penalty=config.presence_penalty,
+                stop=config.stop
+            )
+        
+        # 如果提供了provider参数，覆盖配置中的provider
+        if provider:
+            if provider == LLMProvider.DEFAULT:
+                result_config.provider = self.default_config.provider
+            else:
+                # 检查provider是否为字符串或枚举
                 if isinstance(provider, str):
                     try:
-                        config.provider = LLMProvider(provider)
+                        result_config.provider = LLMProvider(provider)
                     except ValueError:
-                        logger.warning(f"无效的提供商: {provider}，使用默认值: {config.provider}")
-                elif isinstance(provider, LLMProvider):
-                    config.provider = provider
-            
-            # 如果提供了model，使用它
-            if model:
-                # 检查model是否包含provider信息（如"deepseek/deepseek-chat"）
-                if '/' in model:
-                    parts = model.split('/', 1)
-                    try:
-                        config.provider = LLMProvider(parts[0])
-                        config.model_name = parts[1]
-                    except ValueError:
-                        logger.warning(f"无效的提供商格式: {parts[0]}，使用默认提供商")
-                        config.model_name = model
+                        logger.warning(f"无效的提供商: {provider}，使用默认值: {result_config.provider}")
                 else:
-                    config.model_name = model
-            
-            # 尝试获取API密钥
-            if not config.api_key:
+                    result_config.provider = provider
+        
+        # 如果提供了model参数，覆盖配置中的model_name
+        if model:
+            # 检查model是否包含provider信息（如"deepseek/deepseek-chat"）
+            if '/' in model:
+                parts = model.split('/', 1)
                 try:
-                    config.api_key = self.get_api_key(config.provider)
-                except Exception as e:
-                    logger.warning(f"获取API密钥失败: {str(e)}，使用空API密钥")
-            
-            logger.debug(f"生成请求配置: 提供商={config.provider}, 模型={config.model_name}")
-            return config
-        else:
-            # 如果没有提供config，使用默认配置
-            config = self.default_config
-            
-            # 如果提供了provider，使用它
-            if provider:
-                if isinstance(provider, str):
-                    try:
-                        config.provider = LLMProvider(provider)
-                    except ValueError:
-                        logger.warning(f"无效的提供商: {provider}，使用默认值: {config.provider}")
-                elif isinstance(provider, LLMProvider):
-                    config.provider = provider
-            
-            # 如果提供了model，使用它
-            if model:
-                # 检查model是否包含provider信息（如"deepseek/deepseek-chat"）
-                if '/' in model:
-                    parts = model.split('/', 1)
-                    try:
-                        config.provider = LLMProvider(parts[0])
-                        config.model_name = parts[1]
-                    except ValueError:
-                        logger.warning(f"无效的提供商格式: {parts[0]}，使用默认提供商")
-                        config.model_name = model
+                    result_config.provider = LLMProvider(parts[0])
+                    result_config.model_name = parts[1]
+                except ValueError:
+                    logger.warning(f"无效的提供商格式: {parts[0]}，使用默认提供商")
+                    if model == "default":
+                        result_config.model_name = self.default_config.model_name
+                    else:
+                        result_config.model_name = model
+            else:
+                if model == "default":
+                    result_config.model_name = self.default_config.model_name
                 else:
-                    config.model_name = model
-            
-            # 尝试获取API密钥
-            if not config.api_key:
-                try:
-                    config.api_key = self.get_api_key(config.provider)
-                except Exception as e:
-                    logger.warning(f"获取API密钥失败: {str(e)}，使用空API密钥")
-            
-            logger.debug(f"生成请求配置: 提供商={config.provider}, 模型={config.model_name}")
-            return config
+                    result_config.model_name = model
+        
+        # 尝试获取API密钥
+        if not result_config.api_key:
+            try:
+                result_config.api_key = self._get_api_key_for_provider(result_config.provider)
+            except Exception as e:
+                logger.warning(f"获取API密钥失败: {str(e)}，使用空API密钥")
+        
+        logger.debug(f"生成请求配置: 提供商={result_config.provider}, 模型={result_config.model_name}")
+        return result_config
     
+    def _get_api_key_for_provider(self, provider: LLMProvider) -> str:
+        """根据提供商获取API密钥"""
+        if provider == LLMProvider.DEEPSEEK:
+            api_key = os.environ.get("DEEPSEEK_API_KEY", "")
+            if not api_key.startswith("sk-"):
+                api_key = f"sk-{api_key}"
+            return api_key
+        elif provider == LLMProvider.ZHIPU:
+            return os.environ.get("ZHIPU_API_KEY", "")
+        elif provider == LLMProvider.OPENAI:
+            return os.environ.get("OPENAI_API_KEY", "")
+        else:
+            return ""
+
     def _get_request_url(self, config: LLMConfig) -> str:
         """
         获取请求URL
@@ -1386,7 +1423,7 @@ class LLMService:
             请求URL
         """
         return self._get_api_endpoint(config)
-    
+
     def _get_response_parser(self, config: LLMConfig):
         """
         获取响应解析器
@@ -1425,7 +1462,7 @@ class LLMService:
                                     finish_reason=finish_reason
                                 )
                 return None
-                
+            
         return ResponseParser(config)
 
 def get_api_key(provider):

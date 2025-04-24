@@ -288,9 +288,12 @@
                                 启用智能角色匹配
                             </label>
                         </div>
-                        <div style="display: flex; gap: 10px;">
-                            <button id="stop-btn" disabled
-                                style="background-color: #f44336; color: white;">停止生成</button>
+                        <div class="secondary-controls">
+                            <button id="clear-button" title="清空对话">清空对话</button>
+                            <button id="reset-lock-button" title="重置会话锁" style="display:none; background-color: #FFA726; color: white;">重置会话锁</button>
+                        </div>
+                        <div class="primary-controls">
+                            <button id="stop-btn" disabled>停止生成</button>
                             <button id="send-button">发送</button>
                         </div>
                     </div>
@@ -304,6 +307,8 @@
         const userInput = document.getElementById('user-input');
         const sendButton = document.getElementById('send-button');
         const stopButton = document.getElementById('stop-btn');
+        const clearButton = document.getElementById('clear-button');
+        const resetLockButton = document.getElementById('reset-lock-button');
 
         // 全局变量
         let isWaitingForResponse = false;
@@ -315,6 +320,9 @@
         let currentUserId = null; // 存储用户ID
         let selectedRoleId = null; // 当前选中的角色ID
         let selectedRoleName = '助手'; // 当前选中的角色名称
+        let startTime = 0;
+        let queryLang = 'zh';
+        let references = null;
 
         // 初始化参数
         function initializeParams() {
@@ -426,6 +434,8 @@
             // 添加事件监听器
             sendButton.addEventListener('click', sendMessage);
             stopButton.addEventListener('click', stopGeneration);
+            clearButton.addEventListener('click', resetSessionLock);
+            resetLockButton.addEventListener('click', resetSessionLock);
 
             // 添加输入框回车事件
             userInput.addEventListener('keydown', function (e) {
@@ -626,7 +636,66 @@
             scrollToBottom();
         }
 
-        // 发送消息
+        // 重置会话锁
+        async function resetSessionLock() {
+            if (!currentSessionId) {
+                console.warn('没有会话ID，无法重置锁');
+                return false;
+            }
+            
+            try {
+                resetLockButton.disabled = true;
+                resetLockButton.textContent = '重置中...';
+                
+                const response = await fetch('/api/llm/chatrag/reset-stream', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        session_id: currentSessionId,
+                        request_id: currentMessageId
+                    })
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`重置锁失败: ${response.status}`);
+                }
+                
+                const result = await response.json();
+                console.log('重置会话锁成功:', result);
+                
+                // 显示成功提示
+                showSystemMessage('会话锁已重置，可以继续发送消息');
+                
+                // 隐藏重置按钮
+                resetLockButton.style.display = 'none';
+                resetLockButton.disabled = false;
+                resetLockButton.textContent = '重置会话锁';
+                
+                return true;
+            } catch (error) {
+                console.error('重置会话锁失败:', error);
+                
+                // 恢复按钮状态
+                resetLockButton.disabled = false;
+                resetLockButton.textContent = '重置会话锁';
+                
+                showSystemMessage(`重置会话锁失败: ${error.message}`);
+                return false;
+            }
+        }
+        
+        // 显示系统消息
+        function showSystemMessage(message) {
+            const messageElement = document.createElement('div');
+            messageElement.className = 'message system';
+            messageElement.innerHTML = `<div class="message-content">${message}</div>`;
+            messagesContainer.appendChild(messageElement);
+            scrollToBottom();
+        }
+
+        // 修改发送消息函数，实现两阶段调用
         async function sendMessage() {
             const userMessage = userInput.value.trim();
 
@@ -646,548 +715,38 @@
             isWaitingForResponse = true;
             sendButton.disabled = true;
 
-            // 添加助手响应框
-            const assistantMessageElement = addMessageToUI('assistant', '', selectedRoleName);
-            console.log('创建助手消息元素:', assistantMessageElement);
-
             try {
-                // 获取URL参数中的用户ID
-                const urlParams = new URLSearchParams(window.location.search);
-                const userId = urlParams.get('userId');
+                // 创建助手响应框
+                const assistantMessageElement = addMessageToUI('assistant', '思考中...', selectedRoleName);
+                console.log('创建助手消息元素:', assistantMessageElement);
 
-                // 生成消息ID
-                currentMessageId = Date.now().toString(36) + Math.random().toString(36).substring(2, 9);
+                // 第一阶段：角色选择
+                console.log("开始第一阶段：角色选择");
+                const roleResult = await selectRole(userMessage);
 
-                // 准备请求参数
-                const requestData = {
-                    messages: currentMessages,
-                    stream: false,  // 改为false，让后端决定使用何种方式响应
-                    temperature: 0.7,
-                    role_id: selectedRoleId,
-                    message_id: currentMessageId,
-                    // 添加自动角色匹配参数
-                    auto_role_match: document.getElementById('auto-role-match')?.checked || false,
-                    // 添加必需参数
-                    provider: "deepseek",
-                    model_name: "deepseek-chat",
-                    api_key: ""  // 使用空字符串
-                };
-
-                // 如果有会话ID，添加到请求参数中
-                if (currentSessionId) {
-                    requestData.session_id = currentSessionId;
-                    console.log('使用会话ID:', currentSessionId);
-                } else {
-                    console.warn('没有会话ID，服务器将创建临时会话 - 可能无法保存聊天记录');
-                    // 添加提示内容到助手消息中
-                    const contentElement = assistantMessageElement.querySelector('.message-content');
-                    if (contentElement) {
-                        contentElement.innerHTML = `<div style="color: #e65100; padding: 5px; margin-bottom: 10px; font-style: italic; background-color: #fff3e0; border-radius: 5px;">
-                            正在临时会话模式下处理请求，消息可能无法被正确存储...
-                        </div>`;
-                    }
+                if (!roleResult.success) {
+                    // 角色选择失败，显示错误
+                    updateAssistantMessage(assistantMessageElement, `角色选择失败: ${roleResult.error || '未知错误'}`);
+                    isWaitingForResponse = false;
+                    sendButton.disabled = false;
+                    return;
                 }
 
-                // 如果有用户ID，添加到请求参数中 - 使用全局变量
-                if (currentUserId) {
-                    requestData.user_id = currentUserId;
-                    console.log('使用已保存的用户ID:', currentUserId);
-                } else if (userId) {
-                    // 备用：如果全局变量为空，尝试从URL获取
-                    requestData.user_id = userId;
-                    console.log('从URL获取用户ID:', userId);
-                } else {
-                    // 默认值
-                    requestData.user_id = 'anonymous_user';
-                    console.log('使用默认用户ID: anonymous_user');
-                }
-                
-                // 调用聊天API
-                console.log('发送聊天请求:', JSON.stringify(requestData, null, 2));
-                console.log('使用端点: /api/llm/chatrag');
-                
-                // 确保任何现有的reader已被关闭
-                if (window.currentReader) {
-                    try {
-                        console.log('关闭之前的流读取器');
-                        window.currentReader.cancel().catch(e => console.warn('取消之前的reader失败:', e));
-                        window.currentReader = null;
-                    } catch (e) {
-                        console.warn('关闭之前的reader失败:', e);
-                    }
-                }
-                
-                const response = await fetch('/api/llm/chatrag', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify(requestData)
-                });
-
-                // 记录响应头信息以便调试
-                console.log('响应状态:', response.status);
-                console.log('响应类型:', response.headers.get('Content-Type'));
-                const contentType = response.headers.get('Content-Type') || '';
-                const isStreamResponse = contentType.includes('text/event-stream');
-                console.log('是否为流式响应:', isStreamResponse);
-
-                // 处理错误响应
-                if (!response.ok) {
-                    // 尝试获取错误详情
-                    let errorDetail = '';
-                    try {
-                        const errorJson = await response.json();
-                        if (typeof errorJson === 'object') {
-                            // 将对象转换为格式化的字符串
-                            errorDetail = JSON.stringify(errorJson, null, 2);
-                        } else {
-                            errorDetail = errorJson.error || errorJson.detail || JSON.stringify(errorJson);
-                        }
-                    } catch (e) {
-                        // 如果无法解析JSON，则使用响应文本
-                        errorDetail = await response.text();
-                    }
-                    
-                    console.error('API返回错误:', errorDetail);
-                    
-                    // 抛出更详细的错误
-                    throw new Error(`API错误: ${response.status}${errorDetail ? ' - ' + errorDetail : ''}`);
+                // 更新UI显示角色信息
+                if (roleResult.role_info) {
+                    updateAssistantRoleInfo(assistantMessageElement, roleResult.role_info);
                 }
 
-                // 对于非流式响应，直接处理JSON
-                if (!isStreamResponse && contentType.includes('application/json')) {
-                    console.log('接收到JSON响应，直接处理');
-                    try {
-                        const jsonData = await response.json();
-                        console.log('JSON响应内容:', jsonData);
-                        
-                        // 处理不同类型的JSON响应结构
-                        let responseContent = null;
-                        
-                        // 1. 处理OpenAI风格响应
-                        if (jsonData.choices && jsonData.choices.length > 0) {
-                            if (jsonData.choices[0].message && jsonData.choices[0].message.content) {
-                                responseContent = jsonData.choices[0].message.content;
-                            }
-                        }
-                        // 2. 处理直接内容响应
-                        else if (jsonData.content) {
-                            responseContent = jsonData.content;
-                        }
-                        // 3. 处理RAG特定响应
-                        else if (jsonData.response && jsonData.response.content) {
-                            responseContent = jsonData.response.content;
-                        }
-                        
-                        // 如果成功提取到内容
-                        if (responseContent) {
-                            // 更新UI中的消息
-                            updateAssistantMessage(assistantMessageElement, responseContent);
-                            
-                            // 添加到消息历史
-                            currentMessages.push({
-                                role: 'assistant',
-                                content: responseContent
-                            });
-                            
-                            // 处理角色信息（如果有）
-                            if (jsonData.role_match || jsonData.role_info) {
-                                const roleInfo = jsonData.role_match?.role || jsonData.role_info;
-                                if (roleInfo && roleInfo.name) {
-                                    console.log('从响应中获取角色信息:', roleInfo);
-                                    
-                                    // 更新UI中的角色名称
-                                    const senderElement = assistantMessageElement.querySelector('.message-sender');
-                                    if (senderElement) {
-                                        senderElement.textContent = roleInfo.name;
-                                    }
-                                }
-                            }
-                            
-                            console.log('成功处理非流式响应');
-                            
-                            // 重置状态
-                            isWaitingForResponse = false;
-                            sendButton.disabled = false;
-                            stopButton.disabled = true;
-                            
-                            // 滚动到底部
-                            scrollToBottom();
-                            return;
-                        } else {
-                            console.warn('无法从JSON响应提取内容:', jsonData);
-                        }
-                    } catch (e) {
-                        console.error('解析JSON响应出错:', e);
-                    }
-                }
-
-                // 如果不是JSON响应或无法提取内容，尝试流式处理
-                if (response.body) {
-                    // 启用停止按钮（对于流式响应）
-                    stopButton.disabled = false;
-                    
-                    let reader = null;
-                    try {
-                        // 检查stream是否已锁定
-                        if (response.body.locked) {
-                            console.warn('响应流已被锁定，尝试使用备用方法获取数据');
-                            try {
-                                // 备用方法：尝试使用克隆的响应来获取内容
-                                const clonedResponse = response.clone();
-                                const textContent = await clonedResponse.text();
-                                console.log('使用备用方法获取到内容:', textContent.substring(0, 100) + '...');
-                                
-                                try {
-                                    // 尝试解析JSON
-                                    const jsonData = JSON.parse(textContent);
-                                    // 提取内容和角色信息
-                                    if (jsonData.choices && jsonData.choices.length > 0) {
-                                        if (jsonData.choices[0].message && jsonData.choices[0].message.content) {
-                                            updateAssistantMessage(assistantMessageElement, jsonData.choices[0].message.content);
-                                            currentMessages.push({
-                                                role: 'assistant',
-                                                content: jsonData.choices[0].message.content
-                                            });
-                                        }
-                                    }
-                                    // 检查角色信息
-                                    if (jsonData.role_match && jsonData.role_match.role) {
-                                        const roleInfo = jsonData.role_match.role;
-                                        // 更新全局变量
-                                        if (roleInfo.name) {
-                                            selectedRoleName = roleInfo.name;
-                                            console.log('备用方法更新全局角色名称为:', selectedRoleName);
-                                            
-                                            // 更新页面标题显示角色名
-                                            updatePageWithRoleName(selectedRoleName);
-                                        }
-                                        updateAssistantRoleInfo(assistantMessageElement, roleInfo);
-                                    }
-                                } catch (jsonError) {
-                                    console.error('解析备用内容失败:', jsonError);
-                                    updateAssistantMessage(assistantMessageElement, '无法获取响应内容，请重试。');
-                                }
-                            } catch (backupError) {
-                                console.error('备用方法失败:', backupError);
-                                const contentElement = assistantMessageElement.querySelector('.message-content');
-                                if (contentElement) {
-                                    contentElement.innerHTML = `<div style="color: red; padding: 10px; background-color: #ffeeee; border-radius: 5px;">
-                                        <strong>错误:</strong> 响应流已被锁定，无法处理。请重新发送消息。
-                                    </div>`;
-                                }
-                            }
-                            
-                            isWaitingForResponse = false;
-                            sendButton.disabled = false;
-                            stopButton.disabled = true;
-                            return;
-                        }
-                        
-                        // 获取reader并存储在全局变量中方便后续清理
-                        reader = response.body.getReader();
-                        window.currentReader = reader;
-                    } catch (readerError) {
-                        console.error('获取流读取器失败:', readerError);
-                        const contentElement = assistantMessageElement.querySelector('.message-content');
-                        if (contentElement) {
-                            contentElement.innerHTML += `<div style="color: red; padding: 10px; background-color: #ffeeee; border-radius: 5px;">
-                                <strong>错误:</strong> 无法获取响应流 (${readerError.message})
-                            </div>`;
-                        }
-                        isWaitingForResponse = false;
-                        sendButton.disabled = false;
-                        stopButton.disabled = true;
-                        return;
-                    }
-                    
-                    const decoder = new TextDecoder();
-                    let responseText = '';
-                    let references = null;
-                    let startTime = Date.now();
-                    let hasReceivedContent = false; // 标记是否接收到内容
-
-                    // 处理流式响应
-                    try {
-                        console.log('开始处理响应流');
-                        while (true) {
-                            let readResult;
-                            try {
-                                readResult = await reader.read();
-                            } catch (readError) {
-                                console.error('读取流失败:', readError);
-                                break;
-                            }
-                            
-                            const { value, done } = readResult;
-                            
-                            if (done) {
-                                console.log('响应流结束 - done标志');
-                                break;
-                            }
-
-                            const chunk = decoder.decode(value, { stream: true });
-                            console.log('接收到数据块:', chunk.length, '字节');
-                            const lines = chunk.split('\n');
-                            
-                            for (const line of lines) {
-                                // 忽略空行或只包含HTTP头信息的行
-                                if (!line.trim() || line.trim().startsWith(':') || line.includes('keep-alive')) {
-                                    console.log('忽略HTTP头或空行:', line);
-                                    continue;
-                                }
-                                
-                                if (line.startsWith('data: ') && line.length > 6) {
-                                    const data = line.substring(6).trim();
-                                    console.log('处理SSE数据行:', data.substring(0, 50) + (data.length > 50 ? '...' : ''));
-
-                                    // 检查是否为结束标记
-                                    if (data === '[DONE]') {
-                                        isWaitingForResponse = false;
-                                        sendButton.disabled = false;
-                                        stopButton.disabled = true;
-                                        break;
-                                    }
-
-                                    try {
-                                        // 解析 JSON 数据
-                                        let parsedData = JSON.parse(data);
-                                        
-                                        // 检查是否有错误
-                                        if (parsedData.error) {
-                                            console.error('API错误:', parsedData.error);
-                                            const contentElement = assistantMessageElement.querySelector('.message-content');
-                                            if (contentElement) {
-                                                const errorMsg = `<div style="color: red; padding: 10px; background-color: #ffeeee; border-radius: 5px;">
-                                                    <strong>错误:</strong> ${parsedData.error}
-                                                </div>`;
-                                                contentElement.innerHTML += errorMsg;
-                                            }
-                                            continue;
-                                        }
-                                        
-                                        // 处理消息ID
-                                        if (parsedData.message_id) {
-                                            console.log('收到消息ID:', parsedData.message_id);
-                                            currentMessageId = parsedData.message_id;
-                                            stopButton.disabled = false;
-                                            continue;
-                                        }
-                                        
-                                        // 处理角色匹配结果
-                                        if (parsedData.role_match) {
-                                            console.log('角色匹配结果:', parsedData.role_match);
-                                            const roleMatch = parsedData.role_match;
-                                            
-                                            if (roleMatch.success && roleMatch.role) {
-                                                // 更新全局变量，保存匹配的角色名称
-                                                if (roleMatch.role.name) {
-                                                    selectedRoleName = roleMatch.role.name;
-                                                    console.log('更新全局角色名称为:', selectedRoleName);
-                                                    
-                                                    // 更新页面标题显示角色名
-                                                    updatePageWithRoleName(selectedRoleName);
-                                                }
-                                                // 调用新函数处理角色信息
-                                                updateAssistantRoleInfo(assistantMessageElement, roleMatch.role);
-                                            }
-                                            continue;
-                                        }
-                                        
-                                        // 处理常规SSE流式响应 (api/llm/chat格式)
-                                        if (parsedData.event_type === 'content') {
-                                            if (parsedData.text) {
-                                                responseText += parsedData.text;
-                                                updateAssistantMessage(assistantMessageElement, responseText);
-                                            }
-                                        }
-                                        // 处理RAG格式响应 (api/llm/chatrag格式)
-                                        else if (parsedData.choices && Array.isArray(parsedData.choices)) {
-                                            // 处理不同类型的RAG响应
-                                            if (parsedData.choices[0].delta && parsedData.choices[0].delta.content) {
-                                                // 流式增量格式
-                                                responseText += parsedData.choices[0].delta.content;
-                                                updateAssistantMessage(assistantMessageElement, responseText);
-                                            }
-                                            else if (parsedData.choices[0].message && parsedData.choices[0].message.content) {
-                                                // 完整消息格式
-                                                responseText = parsedData.choices[0].message.content;
-                                                updateAssistantMessage(assistantMessageElement, responseText);
-                                                
-                                                // 这是完整响应，可以退出处理循环
-                                                isWaitingForResponse = false;
-                                                sendButton.disabled = false;
-                                                stopButton.disabled = true;
-                                                break;
-                                            }
-                                            else if (parsedData.choices[0].delta && parsedData.choices[0].delta.role === 'assistant') {
-                                                // 角色声明，忽略但记录
-                                                console.log('收到角色声明:', parsedData.choices[0].delta.role);
-                                            }
-                                            else if (parsedData.choices[0].finish_reason) {
-                                                // 结束标记
-                                                console.log('收到结束标记:', parsedData.choices[0].finish_reason);
-                                                isWaitingForResponse = false;
-                                                sendButton.disabled = false;
-                                                stopButton.disabled = true;
-                                                break;
-                                            }
-                                        }
-                                        // 处理引用信息
-                                        else if (parsedData.event_type === 'references' && parsedData.references) {
-                                            references = parsedData.references;
-                                        }
-                                        // 处理开始事件
-                                        else if (parsedData.event_type === 'start') {
-                                            console.log('开始生成响应', parsedData);
-                                            startTime = Date.now();
-                                        }
-                                        // 处理结束事件
-                                        else if (parsedData.event_type === 'end') {
-                                            console.log('生成响应完成', parsedData);
-                                            const endTime = Date.now();
-                                            console.log(`生成耗时: ${(endTime - startTime) / 1000}秒`);
-                                        }
-                                        // 处理停止事件
-                                        else if (parsedData.event_type === 'stopped') {
-                                            console.log('生成已手动停止', parsedData);
-                                            const contentElement = assistantMessageElement.querySelector('.message-content');
-                                            if (contentElement) {
-                                                const stoppedMsg = `<div style="color: #666; font-style: italic; margin-top: 8px; padding: 5px;">
-                                                    消息生成已停止
-                                                </div>`;
-                                                contentElement.innerHTML += stoppedMsg;
-                                            }
-                                        }
-                                        // 处理其他未知事件类型
-                                        else {
-                                            console.log('收到未知格式数据:', parsedData);
-                                        }
-                                    } catch (e) {
-                                        console.warn('解析响应数据失败:', e, data);
-                                    }
-                                } else if (line.trim() && line.trim() !== 'data:') {
-                                    // 处理非标准格式的数据行
-                                    console.log('收到非标准数据行:', line);
-                                    try {
-                                        // 尝试直接解析JSON (非SSE格式)
-                                        const parsedData = JSON.parse(line);
-                                        console.log('解析非SSE格式JSON成功:', parsedData);
-                                        
-                                        // 处理RAG直接响应格式
-                                        if (parsedData.choices && parsedData.choices[0] && parsedData.choices[0].message) {
-                                            responseText = parsedData.choices[0].message.content;
-                                            updateAssistantMessage(assistantMessageElement, responseText);
-                                            isWaitingForResponse = false;
-                                            sendButton.disabled = false;
-                                            stopButton.disabled = true;
-                                        }
-                                    } catch (e) {
-                                        console.warn('尝试解析非标准数据行失败:', e);
-                                    }
-                                }
-                            }
-                        }
-
-                        // 添加引用信息（如果有）
-                        if (references) {
-                            showReferences(references, assistantMessageElement);
-                        }
-
-                        // 添加到消息历史
-                        if (responseText) {
-                            currentMessages.push({
-                                role: 'assistant',
-                                content: responseText
-                            });
-                        }
-                    } catch (e) {
-                        console.error('解析流式响应失败:', e);
-                    } finally {
-                        // 在finally语句中确保释放reader
-                        try {
-                            if (reader) {
-                                try {
-                                    // 尝试取消读取
-                                    reader.cancel().catch(e => console.warn('取消reader失败:', e));
-                                    // 清除全局引用
-                                    if (window.currentReader === reader) {
-                                        window.currentReader = null;
-                                    }
-                                } catch (cancelError) {
-                                    console.warn('取消reader失败:', cancelError);
-                                }
-                            }
-                        } catch (e) {
-                            console.warn('关闭reader失败:', e);
-                        }
-                        
-                        // 重置UI状态
-                        isWaitingForResponse = false;
-                        sendButton.disabled = false;
-                        stopButton.disabled = true;
-                    }
-                } else {
-                    console.error('响应没有body属性');
-                    
-                    // 如果响应没有body但状态是200，尝试直接获取响应内容
-                    if (response.status === 200) {
-                        try {
-                            console.log('尝试直接读取响应JSON');
-                            const jsonResponse = await response.json();
-                            console.log('接收到完整JSON响应:', jsonResponse);
-                            
-                            // 处理非流式响应
-                            if (jsonResponse.choices && jsonResponse.choices.length > 0) {
-                                if (jsonResponse.choices[0].message && jsonResponse.choices[0].message.content) {
-                                    responseText = jsonResponse.choices[0].message.content;
-                                    updateAssistantMessage(assistantMessageElement, responseText);
-                                    
-                                    // 添加到消息历史
-                                    currentMessages.push({
-                                        role: 'assistant',
-                                        content: responseText
-                                    });
-                                    
-                                    console.log('成功处理非流式RAG响应');
-                                }
-                                
-                                // 处理角色信息（如果有）
-                                if (jsonResponse.role_match || jsonResponse.role_info) {
-                                    const roleInfo = jsonResponse.role_match?.role || jsonResponse.role_info;
-                                    if (roleInfo && roleInfo.name) {
-                                        console.log('从响应中获取角色信息:', roleInfo);
-                                        
-                                        // 更新UI中的角色名称
-                                        const senderElement = assistantMessageElement.querySelector('.message-sender');
-                                        if (senderElement) {
-                                            senderElement.textContent = roleInfo.name;
-                                        }
-                                    }
-                                }
-                            } else {
-                                console.warn('响应没有预期的choices结构:', jsonResponse);
-                            }
-                        } catch (e) {
-                            console.error('解析非流式响应失败:', e);
-                            throw new Error('无法解析响应: ' + e.message);
-                        }
-                    } else {
-                        throw new Error('无效的流式响应');
-                    }
-                }
-
-                // 重置状态
-                isWaitingForResponse = false;
-                sendButton.disabled = false;
-                stopButton.disabled = true;
-
-                // 滚动到底部
-                scrollToBottom();
+                // 第二阶段：生成响应
+                console.log("开始第二阶段：生成响应", roleResult);
+                await generateResponse(roleResult, assistantMessageElement);
 
             } catch (error) {
                 console.error('发送消息失败:', error);
+                
+                // 在UI中显示错误消息
+                const errorElement = document.createElement('div');
+                errorElement.className = 'message system';
                 // 在UI中显示详细错误信息
                 const contentElement = assistantMessageElement.querySelector('.message-content');
                 if (contentElement) {
@@ -1199,9 +758,28 @@
                                 <summary>查看详细错误信息</summary>
                                 <pre style="background: #f5f5f5; padding: 8px; overflow: auto;">${error.stack || '没有更多信息'}</pre>
                             </details>
-                            <div style="margin-top: 8px;">请刷新页面或返回会话列表重试。</div>
                         </div>
                     `;
+                    
+                    // 如果错误看起来像是锁相关问题，添加重置选项
+                    if (error.message.includes('423') || 
+                        error.message.toLowerCase().includes('lock') || 
+                        error.message.includes('会话') || 
+                        error.message.includes('正在处理')) {
+                        
+                        contentElement.innerHTML += `
+                            <div style="margin-top: 10px;">
+                                可能是会话锁定问题，请尝试重置会话锁
+                            </div>
+                        `;
+                        
+                        // 显示重置按钮
+                        resetLockButton.style.display = 'inline-block';
+                    } else {
+                        contentElement.innerHTML += `
+                            <div style="margin-top: 8px;">请刷新页面或返回会话列表重试。</div>
+                        `;
+                    }
                 }
 
                 // 重置状态
@@ -1372,79 +950,425 @@
             messagesContainer.scrollTop = messagesContainer.scrollHeight;
         }
 
-        // 处理流式输出
-        async function processStreamResponse(response, messageElement) {
+        // 第一阶段：角色选择
+        async function selectRole(userMessage) {
+            try {
+                const requestData = {
+                    messages: currentMessages,
+                    session_id: currentSessionId,
+                    user_id: currentUserId,
+                    auto_role_match: document.getElementById('auto-role-match')?.checked || false,
+                    provider: null,
+                    model_name: null,
+                    api_key: null
+                };
+
+                console.log('发送角色选择请求:', JSON.stringify({ request_data: requestData }, null, 2));
+                
+                // 使用正式的角色选择路由
+                const response = await fetch('/api/llm/chatrag/role-select', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ request_data: requestData })
+                });
+
+                if (!response.ok) {
+                    if (response.status === 423) {
+                        throw new Error('会话锁定，请重置会话锁或稍后再试');
+                    }
+                    throw new Error(`角色选择请求失败: ${response.status}`);
+                }
+
+                const result = await response.json();
+                console.log('角色选择结果:', result);
+
+                if (result.role_match && result.role_match.success && result.role_match.role) {
+                    // 更新全局变量
+                    updateSelectedRole(
+                        result.role_match.role.id,
+                        result.role_match.role.name
+                    );
+
+                    return {
+                        success: true,
+                        request_id: result.request_id,
+                        role_id: result.role_match.role.id,
+                        role_info: result.role_match.role,
+                        match_reason: result.role_match.match_reason,
+                        provider: result.provider,
+                        model_name: result.model_name,
+                        api_key: result.api_key
+                    };
+                }
+
+                // 如果没有角色匹配成功，但请求成功了，仍然返回成功状态但不带角色ID
+                return {
+                    success: true,
+                    request_id: result.request_id,
+                    error: result.role_match?.error || "未找到合适角色"
+                };
+            } catch (error) {
+                console.error('角色选择失败:', error);
+                return { 
+                    success: false, 
+                    error: error.message 
+                };
+            }
+        }
+
+        // 第二阶段：生成响应
+        async function generateResponse(roleResult, assistantMessageElement) {
+            try {
+                const requestData = {
+                    messages: currentMessages,
+                    session_id: currentSessionId,
+                    user_id: currentUserId,
+                    role_id: roleResult.role_id,
+                    request_id: roleResult.request_id,
+                    stream: true,
+                    provider: roleResult.provider,
+                    model_name: roleResult.model_name,
+                    api_key: roleResult.api_key
+                };
+
+                console.log('发送响应生成请求:', JSON.stringify(requestData, null, 2));
+                
+                const response = await fetch('/api/llm/chatrag/generate', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(requestData)
+                });
+
+                if (!response.ok) {
+                    if (response.status === 423) {
+                        const errorData = await response.json();
+                        console.warn('会话被锁定:', errorData);
+                        
+                        // 显示错误信息
+                        const contentElement = assistantMessageElement.querySelector('.message-content');
+                        if (contentElement) {
+                            contentElement.innerHTML = `
+                                <div style="color: #FF6F00; padding: 10px; background-color: #FFF3E0; border-radius: 5px; margin-bottom: 10px;">
+                                    <strong>会话锁定错误:</strong> ${errorData.error || '会话当前正在处理另一个请求，请稍后再试'}
+                                </div>
+                                <div>正在尝试自动重置会话锁...</div>
+                            `;
+                        }
+                        
+                        // 尝试重置锁
+                        const resetResult = await resetSessionLock();
+                        
+                        if (resetResult) {
+                            if (contentElement) {
+                                contentElement.innerHTML += `
+                                    <div style="color: #388E3C; padding: 10px; background-color: #E8F5E9; border-radius: 5px; margin-top: 10px;">
+                                        会话锁已重置，请重新发送消息
+                                    </div>
+                                `;
+                            }
+                        } else {
+                            // 显示手动重置按钮
+                            resetLockButton.style.display = 'inline-block';
+                            
+                            if (contentElement) {
+                                contentElement.innerHTML += `
+                                    <div style="margin-top: 10px;">
+                                        自动重置失败，请点击"重置会话锁"按钮手动重置，或刷新页面重试
+                                    </div>
+                                `;
+                            }
+                        }
+                        
+                        // 重置状态
+                        isWaitingForResponse = false;
+                        sendButton.disabled = false;
+                        stopButton.disabled = true;
+                        return;
+                    }
+                    
+                    throw new Error(`响应生成请求失败: ${response.status}`);
+                }
+
+                // 检查响应格式
+                const contentType = response.headers.get('Content-Type') || '';
+                const isStreamResponse = contentType.includes('text/event-stream');
+                console.log('是否为流式响应:', isStreamResponse);
+                
+                if (isStreamResponse) {
+                    // 处理流式响应
+                    await processStreamResponse(response, assistantMessageElement);
+                } else {
+                    // 处理非流式响应
+                    const jsonData = await response.json();
+                    console.log('非流式响应内容:', jsonData);
+                    
+                    // 提取内容
+                    let responseContent = null;
+                    
+                    if (jsonData.choices && jsonData.choices.length > 0) {
+                        if (jsonData.choices[0].message && jsonData.choices[0].message.content) {
+                            responseContent = jsonData.choices[0].message.content;
+                        }
+                    } else if (jsonData.content) {
+                        responseContent = jsonData.content;
+                    }
+                    
+                    if (responseContent) {
+                        updateAssistantMessage(assistantMessageElement, responseContent);
+                        
+                        // 添加到消息历史
+                        currentMessages.push({
+                            role: 'assistant',
+                            content: responseContent
+                        });
+                    } else {
+                        updateAssistantMessage(assistantMessageElement, '无法解析服务器响应');
+                    }
+                }
+                
+            } catch (error) {
+                console.error('生成响应失败:', error);
+                
+                // 显示错误消息
+                const contentElement = assistantMessageElement.querySelector('.message-content');
+                if (contentElement) {
+                    contentElement.innerHTML = `
+                        <div style="color: red; padding: 10px; background-color: #ffeeee; border-radius: 5px;">
+                            <strong>生成响应失败:</strong> ${error.message}
+                        </div>
+                    `;
+                }
+            } finally {
+                // 重置状态
+                isWaitingForResponse = false;
+                sendButton.disabled = false;
+                stopButton.disabled = true;
+                
+                // 滚动到底部
+                scrollToBottom();
+            }
+        }
+        
+        // 处理流式响应
+        async function processStreamResponse(response, assistantMessageElement) {
             let reader = null;
-            let receivedText = '';
-            let contentElem = messageElement.querySelector('.message-content .text');
-            let messageModel = messageElement.getAttribute('data-model') || '';
-            let messageId = messageElement.getAttribute('data-message-id');
+            let responseText = '';
             
             try {
-                // 安全获取reader，如果已锁定则会抛出异常
-                reader = response.body.getReader();
+                // 启用停止按钮
+                stopButton.disabled = false;
+                currentMessageId = null;
                 
                 try {
+                    // 安全获取reader
+                    reader = response.body.getReader();
+                    window.currentReader = reader;
+                } catch (readerError) {
+                    console.error('获取流读取器失败:', readerError);
+                    throw readerError;
+                }
+                
+                const decoder = new TextDecoder();
+                
+                // 处理SSE流
+                try {
+                    console.log('开始处理响应流');
                     while (true) {
-                        const { done, value } = await reader.read();
-                        
-                        if (done) {
-                            // 流结束时，更新UI
-                            contentElem.innerHTML = marked.parse(receivedText);
-                            highlightCode(contentElem);
+                        let readResult;
+                        try {
+                            readResult = await reader.read();
+                        } catch (readError) {
+                            console.error('读取流失败:', readError);
                             break;
                         }
                         
-                        // 解码并处理接收到的数据
-                        const chunks = new TextDecoder().decode(value).split('\n');
-                        for (const chunk of chunks) {
-                            if (!chunk.trim()) continue;
+                        const { value, done } = readResult;
+                        
+                        if (done) {
+                            console.log('响应流结束 - done标志');
+                            break;
+                        }
+
+                        const chunk = decoder.decode(value, { stream: true });
+                        console.log('接收到数据块:', chunk.length, '字节');
+                        const lines = chunk.split('\n');
+                        
+                        for (const line of lines) {
+                            // 忽略空行或只包含HTTP头信息的行
+                            if (!line.trim() || line.trim().startsWith(':') || line.includes('keep-alive')) {
+                                continue;
+                            }
                             
-                            try {
-                                const data = JSON.parse(chunk);
-                                receivedText = data.text || receivedText;
-                                
-                                // 更新消息内容
-                                contentElem.innerHTML = marked.parse(receivedText);
-                                highlightCode(contentElem);
-                                
-                                // 如果完成或出错，更新UI状态
-                                if (data.status === 'completed' || data.status === 'error') {
-                                    receivedText = data.text || receivedText;
-                                    contentElem.innerHTML = marked.parse(receivedText);
-                                    highlightCode(contentElem);
-                                    
-                                    if (data.status === 'error') {
-                                        messageElement.classList.add('error');
-                                    }
+                            if (line.startsWith('data: ') && line.length > 6) {
+                                const data = line.substring(6).trim();
+                                console.log('处理SSE数据行:', data.substring(0, 50) + (data.length > 50 ? '...' : ''));
+
+                                // 检查是否为结束标记
+                                if (data === '[DONE]') {
+                                    isWaitingForResponse = false;
+                                    sendButton.disabled = false;
+                                    stopButton.disabled = true;
                                     break;
                                 }
-                            } catch (e) {
-                                console.error('解析数据时出错:', e);
+
+                                try {
+                                    // 解析 JSON 数据
+                                    let parsedData = JSON.parse(data);
+                                    
+                                    // 检查是否有错误
+                                    if (parsedData.error) {
+                                        console.error('API错误:', parsedData.error);
+                                        const contentElement = assistantMessageElement.querySelector('.message-content');
+                                        if (contentElement) {
+                                            const errorMsg = `<div style="color: red; padding: 10px; background-color: #ffeeee; border-radius: 5px;">
+                                                <strong>错误:</strong> ${parsedData.error}
+                                            </div>`;
+                                            contentElement.innerHTML += errorMsg;
+                                        }
+                                        continue;
+                                    }
+                                    
+                                    // 处理消息ID
+                                    if (parsedData.message_id) {
+                                        console.log('收到消息ID:', parsedData.message_id);
+                                        currentMessageId = parsedData.message_id;
+                                        stopButton.disabled = false;
+                                        continue;
+                                    }
+                                    
+                                    // 处理角色匹配结果
+                                    if (parsedData.role_match) {
+                                        console.log('角色匹配结果:', parsedData.role_match);
+                                        const roleMatch = parsedData.role_match;
+                                        
+                                        if (roleMatch.success && roleMatch.role) {
+                                            // 更新全局变量，保存匹配的角色名称
+                                            if (roleMatch.role.name) {
+                                                selectedRoleName = roleMatch.role.name;
+                                                console.log('更新全局角色名称为:', selectedRoleName);
+                                                
+                                                // 更新页面标题显示角色名
+                                                updatePageWithRoleName(selectedRoleName);
+                                            }
+                                            // 调用函数处理角色信息
+                                            updateAssistantRoleInfo(assistantMessageElement, roleMatch.role);
+                                        }
+                                        continue;
+                                    }
+                                    
+                                    // 处理常规SSE流式响应 (api/llm/chat格式)
+                                    if (parsedData.event_type === 'content') {
+                                        if (parsedData.text) {
+                                            responseText += parsedData.text;
+                                            updateAssistantMessage(assistantMessageElement, responseText);
+                                        }
+                                    }
+                                    // 处理RAG格式响应 (api/llm/chatrag格式)
+                                    else if (parsedData.choices && Array.isArray(parsedData.choices)) {
+                                        // 处理不同类型的RAG响应
+                                        if (parsedData.choices[0].delta && parsedData.choices[0].delta.content) {
+                                            // 流式增量格式
+                                            responseText += parsedData.choices[0].delta.content;
+                                            updateAssistantMessage(assistantMessageElement, responseText);
+                                        }
+                                        else if (parsedData.choices[0].message && parsedData.choices[0].message.content) {
+                                            // 完整消息格式
+                                            responseText = parsedData.choices[0].message.content;
+                                            updateAssistantMessage(assistantMessageElement, responseText);
+                                            
+                                            // 这是完整响应，可以退出处理循环
+                                            isWaitingForResponse = false;
+                                            sendButton.disabled = false;
+                                            stopButton.disabled = true;
+                                            break;
+                                        }
+                                        else if (parsedData.choices[0].delta && parsedData.choices[0].delta.role === 'assistant') {
+                                            // 角色声明，忽略但记录
+                                            console.log('收到角色声明:', parsedData.choices[0].delta.role);
+                                        }
+                                        else if (parsedData.choices[0].finish_reason) {
+                                            // 结束标记
+                                            console.log('收到结束标记:', parsedData.choices[0].finish_reason);
+                                            isWaitingForResponse = false;
+                                            sendButton.disabled = false;
+                                            stopButton.disabled = true;
+                                            break;
+                                        }
+                                    }
+                                    // 处理引用信息
+                                    else if (parsedData.event_type === 'references' || 
+                                          (parsedData.type === 'references' && parsedData.references)) {
+                                        references = parsedData.references;
+                                        
+                                        // 添加引用信息到UI
+                                        if (references && references.length > 0) {
+                                            showReferences(references, assistantMessageElement);
+                                        }
+                                    }
+                                    // 处理新格式的流式响应 (role, content, status格式)
+                                    else if (parsedData.role === 'assistant' && parsedData.content !== undefined) {
+                                        console.log('处理新格式SSE:', parsedData.status, parsedData.content.length, '字符');
+                                        
+                                        // 检查是否为流式传输或完成
+                                        if (parsedData.status === 'streaming') {
+                                            // 流式累积内容
+                                            responseText += parsedData.content;
+                                            updateAssistantMessage(assistantMessageElement, responseText);
+                                        } 
+                                        else if (parsedData.status === 'complete') {
+                                            // 完整内容，可能包含之前的内容，所以直接赋值而不是累加
+                                            responseText = parsedData.content;
+                                            updateAssistantMessage(assistantMessageElement, responseText);
+                                            
+                                            // 这是完整响应，可以退出处理循环
+                                            isWaitingForResponse = false;
+                                            sendButton.disabled = false;
+                                            stopButton.disabled = true;
+                                        }
+                                    }
+                                } catch (e) {
+                                    console.warn('解析响应数据失败:', e, data);
+                                }
                             }
                         }
                     }
-                } catch (readError) {
-                    console.error('读取流时出错:', readError);
-                    contentElem.textContent = `读取回复时出错: ${readError.message}`;
-                    messageElement.classList.add('error');
-                }
-            } catch (lockError) {
-                console.error('获取读取器时出错:', lockError);
-                contentElem.textContent = `获取回复流时出错: ${lockError.message}`;
-                messageElement.classList.add('error');
-            } finally {
-                // 尝试关闭reader（如果存在）
-                if (reader) {
+
+                    // 添加到消息历史
+                    if (responseText) {
+                        currentMessages.push({
+                            role: 'assistant',
+                            content: responseText
+                        });
+                    }
+                } catch (e) {
+                    console.error('解析流式响应失败:', e);
+                    throw e;
+                } finally {
+                    // 在finally语句中确保释放reader
                     try {
-                        await reader.cancel();
-                    } catch (cancelError) {
-                        console.error('取消读取器时出错:', cancelError);
+                        if (reader) {
+                            try {
+                                // 尝试取消读取
+                                reader.cancel().catch(e => console.warn('取消reader失败:', e));
+                                // 清除全局引用
+                                if (window.currentReader === reader) {
+                                    window.currentReader = null;
+                                }
+                            } catch (cancelError) {
+                                console.warn('取消reader失败:', cancelError);
+                            }
+                        }
+                    } catch (e) {
+                        console.warn('关闭reader失败:', e);
                     }
                 }
-                
-                // 重置UI状态
-                enableInput();
+            } catch (error) {
+                console.error('处理流式响应失败:', error);
+                throw error;
             }
         }
 

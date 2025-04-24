@@ -878,8 +878,10 @@
             
             console.log(`打开会话: ${sessionId}, 用户: ${userName}, 用户ID: ${userId}`);
                 
-            // 跳转到RAG聊天页面，携带会话ID、用户名和用户ID参数
-            window.location.href = `/static/rag-chat.html?session_id=${encodeURIComponent(sessionId)}&userName=${encodeURIComponent(userName)}&userId=${encodeURIComponent(userId)}`;
+            // 跳转到两阶段流式聊天页面，使用完整URL，携带会话ID、用户名和用户ID参数
+            const url = `http://localhost:8000/two-phase-stream-chat?session_id=${encodeURIComponent(sessionId)}&userName=${encodeURIComponent(userName)}&userId=${encodeURIComponent(userId)}&displayParams=true`;
+            console.log(`跳转到URL: ${url}`);
+            window.location.href = url;
         }
         
         // 删除会话

@@ -156,8 +156,77 @@ class RAGEnhancedService:
         
     async def _ensure_initialized(self):
         """Ensure the service is initialized"""
-        if not self._initialized:
-            await self.initialize()
+        if self._initialized:
+            return
+        
+        start_time = time.time()
+        request_id = str(uuid.uuid4())
+        logger.debug(f"[{request_id}] 开始RAG服务初始化")
+        try:
+            # 初始化LLM服务
+            llm_init_start = time.time()
+            logger.debug(f"[{request_id}] 开始初始化LLM服务")
+            if not self.llm_service:
+                from ..services.llm_service import llm_service
+                self.llm_service = llm_service
+            
+            # 初始化嵌入服务
+            embed_init_start = time.time()
+            logger.debug(f"[{request_id}] 开始初始化嵌入服务")
+            if not self.embedding_service:
+                from ..services.embedding_service import embedding_service
+                self.embedding_service = embedding_service
+                if not self.embedding_service.initialized:
+                    logger.debug(f"[{request_id}] 嵌入服务需要显式初始化")
+                    await self.embedding_service.initialize()
+            embed_init_time = time.time() - embed_init_start
+            logger.debug(f"[{request_id}] 嵌入服务初始化完成，耗时: {embed_init_time:.4f}秒")
+            
+            llm_init_time = time.time() - llm_init_start
+            logger.debug(f"[{request_id}] LLM服务初始化完成，耗时: {llm_init_time:.4f}秒")
+            
+            # 获取Redis客户端
+            redis_init_start = time.time()
+            logger.debug(f"[{request_id}] 开始初始化Redis客户端")
+            if not self.redis:
+                from ..common.redis_client import get_redis_client
+                self.redis = await asyncio.wait_for(get_redis_client(), timeout=5.0)
+            redis_init_time = time.time() - redis_init_start
+            logger.debug(f"[{request_id}] Redis客户端初始化完成，耗时: {redis_init_time:.4f}秒")
+            
+            # 初始化其他服务
+            other_init_start = time.time()
+            logger.debug(f"[{request_id}] 开始初始化其他服务")
+            if not self.message_service:
+                from ..services.message_service import MessageService
+                self.message_service = MessageService()
+                
+            if not self.session_service:
+                from ..services.session_service import SessionService
+                self.session_service = SessionService()
+                
+            if not self.role_service:
+                from ..services.role_service import RoleService
+                self.role_service = RoleService()
+            other_init_time = time.time() - other_init_start
+            logger.debug(f"[{request_id}] 其他服务初始化完成，耗时: {other_init_time:.4f}秒")
+            
+            # 验证API密钥
+            key_validate_start = time.time()
+            logger.debug(f"[{request_id}] 开始验证API密钥")
+            self._validate_api_keys()
+            key_validate_time = time.time() - key_validate_start
+            logger.debug(f"[{request_id}] API密钥验证完成，耗时: {key_validate_time:.4f}秒")
+            
+            self._initialized = True
+            total_time = time.time() - start_time
+            logger.info(f"[{request_id}] RAG服务初始化完成，总耗时: {total_time:.4f}秒")
+        except Exception as e:
+            total_time = time.time() - start_time
+            logger.error(f"[{request_id}] RAG服务初始化失败，耗时: {total_time:.4f}秒, 错误: {str(e)}")
+            raise
+        
+        return True
     
     def should_skip_rag_analysis(self, question: str) -> tuple[bool, str]:
         """
@@ -773,26 +842,26 @@ Answer:"""
                         # 构建格式化的上下文
                         context_str = self.format_retrieved_documents(retrieved_docs)
                     
-                    # 构建增强的提示
-                    augmented_msg = self._build_augmented_prompt(
-                        last_user_message, context_str, lang=lang
-                    )
-                    
-                    # 用增强的提示替换原始用户消息
-                    enhanced_messages = complete_messages.copy()
-                    enhanced_messages[-1]["content"] = augmented_msg
-                    
-                    # 调用LLM服务生成回复
-                    async for response in self.llm_service.generate_stream(
-                        enhanced_messages,
-                        config=model_config,
-                        message_id=message_id,
-                            stop_generation=self.stop_generation[message_id]
-                    ):
-                        # 收集响应以保存到内存
-                        if isinstance(response, dict) and "content" in response:
-                                ai_response_parts.append(response["content"])
-                        yield response
+                        # 构建增强的提示
+                        augmented_msg = self._build_augmented_prompt(
+                            last_user_message, context_str, lang=lang
+                        )
+                        
+                        # 用增强的提示替换原始用户消息
+                        enhanced_messages = complete_messages.copy()
+                        enhanced_messages[-1]["content"] = augmented_msg
+                        
+                        # 调用LLM服务生成回复
+                        async for response in self.llm_service.generate_stream(
+                            enhanced_messages,
+                            config=model_config,
+                            message_id=message_id,
+                                stop_generation=self.stop_generation[message_id]
+                        ):
+                            # 收集响应以保存到内存
+                            if isinstance(response, dict) and "content" in response:
+                                    ai_response_parts.append(response["content"])
+                            yield response
                     
                 except Exception as e:
                     error_msg = f"处理RAG增强查询时出错: {str(e)}"
@@ -1176,4 +1245,401 @@ Answer:"""
                 self.api_key = f"sk-{self.api_key}"
         else:
             self.logger.error("未提供Deepseek API密钥")
-            raise ValueError("使用Deepseek服务需要提供有效的API密钥") 
+            raise ValueError("使用Deepseek服务需要提供有效的API密钥")
+
+    async def match_role_for_chat(self, messages, session_id=None, user_id=None, lang="zh", 
+                            provider=None, model_name=None, api_key=None):
+        """匹配最适合的角色并返回结果"""
+        start_time = time.time()
+        request_id = str(uuid.uuid4())
+        logger.info(f"[{request_id}] 开始角色匹配: 消息数={len(messages)}, 会话ID={session_id}")
+        
+        try:
+            # 确保服务已初始化
+            init_start = time.time()
+            await self._ensure_initialized()
+            init_time = time.time() - init_start
+            logger.debug(f"[{request_id}] 服务初始化检查完成，耗时: {init_time:.4f}秒")
+            
+            # 获取用户最后一条消息内容
+            msg_process_start = time.time()
+            if not messages or len(messages) == 0:
+                logger.error(f"[{request_id}] 消息列表为空")
+                return {"success": False, "error": "消息列表为空"}
+            
+            # 找到最后一条用户消息
+            last_user_message = None
+            for msg in reversed(messages):
+                if msg.get("role") == "user" and msg.get("content"):
+                    last_user_message = msg.get("content")
+                    break
+            
+            if not last_user_message:
+                logger.error(f"[{request_id}] 找不到有效的用户消息")
+                return {"success": False, "error": "找不到有效的用户消息"}
+            
+            msg_process_time = time.time() - msg_process_start
+            logger.debug(f"[{request_id}] 消息处理完成，耗时: {msg_process_time:.4f}秒")
+            
+            # 调用角色服务进行匹配
+            match_start = time.time()
+            logger.debug(f"[{request_id}] 开始调用RoleService.match_role_for_message")
+            
+            try:
+                match_result = await asyncio.wait_for(
+                    self.role_service.match_role_for_message(last_user_message, session_id),
+                    timeout=25.0  # 设置25秒超时
+                )
+                match_time = time.time() - match_start
+                logger.info(f"[{request_id}] 角色匹配服务调用完成，耗时: {match_time:.4f}秒, 结果: {match_result['success']}")
+            except asyncio.TimeoutError:
+                logger.error(f"[{request_id}] 角色匹配服务调用超时")
+                return {"success": False, "error": "角色匹配服务调用超时"}
+            except Exception as e:
+                logger.error(f"[{request_id}] 角色匹配服务调用失败: {str(e)}")
+                return {"success": False, "error": f"角色匹配失败: {str(e)}"}
+            
+            # 如果会话ID存在且匹配成功，保存匹配角色到Redis
+            if session_id and match_result.get("success") and match_result.get("role"):
+                redis_start = time.time()
+                try:
+                    role_id = match_result["role"]["id"]
+                    await asyncio.wait_for(
+                        self.redis.hset(f"chatrag:session:{session_id}:info", "matched_role_id", role_id),
+                        timeout=2.0
+                    )
+                    await asyncio.wait_for(
+                        self.redis.expire(f"chatrag:session:{session_id}:info", 86400),  # 1天过期
+                        timeout=1.0
+                    )
+                    redis_time = time.time() - redis_start
+                    logger.debug(f"[{request_id}] 保存匹配角色到Redis完成，耗时: {redis_time:.4f}秒")
+                except Exception as e:
+                    logger.warning(f"[{request_id}] 保存匹配角色到Redis失败: {str(e)}")
+            
+            total_time = time.time() - start_time
+            logger.info(f"[{request_id}] 角色匹配完成，总耗时: {total_time:.4f}秒")
+            return match_result
+        except Exception as e:
+            total_time = time.time() - start_time
+            logger.error(f"[{request_id}] 角色匹配过程中出错，耗时: {total_time:.4f}秒, 错误: {str(e)}", exc_info=True)
+            return {"success": False, "error": str(e)}
+    
+    async def get_role_info(self, role_id: str) -> Dict:
+        """
+        获取角色信息
+        
+        Args:
+            role_id: 角色ID
+            
+        Returns:
+            Dict: 角色信息
+        """
+        if not self.role_service:
+            logger.warning("角色服务未初始化")
+            return None
+        
+        try:
+            role_info = await self.role_service.get_role_by_id(role_id)
+            if role_info:
+                return role_info
+            
+            logger.warning(f"未找到角色: {role_id}")
+            return None
+        except Exception as e:
+            logger.error(f"获取角色信息失败: {str(e)}")
+            return None
+    
+    async def generate_response(self, messages: List[dict], model: str = "deepseek-chat", 
+                            session_id: str = None, user_id: str = None, role_id: str = None,
+                            stream: bool = True, provider: str = None, model_name: str = None, 
+                            api_key: str = None) -> AsyncGenerator:
+        """
+        第二阶段：基于已选择的角色生成回复
+        
+        专门用于两阶段API，假设角色匹配已在第一阶段完成
+        
+        Args:
+            messages: 消息列表
+            model: 模型名称
+            session_id: 会话ID
+            user_id: 用户ID
+            role_id: 角色ID
+            stream: 是否启用流式输出 
+            provider: LLM提供商
+            model_name: 模型名称（优先级高于model）
+            api_key: API密钥
+            
+        Yields:
+            生成内容或字典
+        """
+        # 确保服务初始化
+        await self._ensure_initialized()
+        
+        if not messages:
+            yield "错误：消息列表为空"
+            return
+        
+        # 获取用户最新消息
+        query = ""
+        for msg in reversed(messages):
+            if msg["role"] == "user":
+                query = msg["content"]
+                break
+        
+        # 检查是否需要执行RAG流程
+        need_rag = True
+        
+        # 快速规则评估
+        if len(query) < 10:
+            need_rag = False
+            logger.info(f"快速规则触发: 问题过短，无需RAG分析, 跳过RAG分析")
+        
+        # 重要：使用服务中现有的内部方法构建完整上下文
+        prepared_messages = await self._prepare_messages(messages, role_id)
+        
+        # 如果需要RAG，执行知识检索流程
+        if need_rag:
+            # 使用现有的RAG检索方法
+            rag_results = await self._retrieve_knowledge(query)
+            
+            # 将RAG结果添加到消息中
+            if rag_results:
+                logger.info(f"添加{len(rag_results)}条检索结果到上下文")
+                
+                # 添加RAG结果到系统提示
+                prepared_messages = await self._add_rag_to_context(prepared_messages, rag_results)
+                
+                # 可选：将结果以字典形式返回给前端（非文本内容）
+                yield {
+                    "references": rag_results,
+                    "type": "references"
+                }
+        else:
+            logger.info(f"使用快速规则评估: 问题过短，无需RAG分析")
+        
+        # 调用LLM生成回复
+        try:
+            model_to_use = model_name or model
+            logger.info(f"调用LLM生成回复，提供商: {provider or '默认'}, 模型: {model_to_use}")
+            
+            async for content in self.llm_service.generate_text(
+                messages=prepared_messages,
+                model=model_to_use,
+                stream=stream,
+                provider=provider,
+                api_key=api_key
+            ):
+                yield content
+                
+            # 处理消息存储
+            if session_id:
+                try:
+                    # 收集完整回复 - 在实际实现中这部分通常在API层完成
+                    pass
+                except Exception as storage_err:
+                    logger.error(f"存储消息失败: {str(storage_err)}")
+                
+        except Exception as e:
+            logger.error(f"LLM生成回复时出错: {str(e)}")
+            yield f"生成回复时出错: {str(e)}"
+
+    async def _retrieve_knowledge(self, query: str) -> List[Dict[str, Any]]:
+        """
+        Retrieve related documents from the knowledge base
+        
+        Args:
+            query: Query content
+            
+        Returns:
+            Retrieved document list
+        """
+        # Ensure the service is initialized
+        await self._ensure_initialized()
+        
+        self.logger.info(f"Retrieving content from the knowledge base: {query[:50]}...")
+        
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                payload = {
+                    "query": query,
+                    "chat_id": self.ragflow_chat_id
+                }
+                
+                headers = {
+                    "Content-Type": "application/json",
+                }
+                
+                # 只有在API密钥存在时才添加Authorization头
+                if self.api_key and self.api_key.strip():
+                    # 确保API密钥格式正确
+                    api_key = self.api_key.strip()
+                    if not api_key.startswith("skragflow-"):
+                        api_key = f"skragflow-{api_key}"
+                    headers["Authorization"] = f"Bearer {api_key}"
+                else:
+                    self.logger.warning("未提供API密钥，可能导致检索服务授权失败")
+                
+                response = await client.post(
+                    self.retrieval_url,
+                    json=payload,
+                    headers=headers
+                )
+                
+                if response.status_code != 200:
+                    self.logger.error(f"Failed to retrieve from the knowledge base: {response.status_code}, {response.text}")
+                    return []
+                
+                result = response.json()
+                documents = result.get("documents", [])
+                
+                if documents:
+                    self.logger.info(f"Retrieved {len(documents)} related documents")
+                else:
+                    self.logger.warning("No related documents retrieved")
+                
+                return documents
+        except Exception as e:
+            self.logger.error(f"An error occurred when retrieving documents: {str(e)}")
+            return []
+    
+    async def _add_rag_to_context(self, messages: List[dict], rag_results: List[Dict[str, Any]]) -> List[dict]:
+        """
+        添加检索结果到消息上下文中
+        
+        Args:
+            messages: 原始消息列表
+            rag_results: 检索结果
+            
+        Returns:
+            添加了RAG结果的消息列表
+        """
+        # Ensure the service is initialized
+        await self._ensure_initialized()
+        
+        # Format retrieved documents for use in prompts
+        # No need for await here since format_retrieved_documents is synchronous
+        context_str = self.format_retrieved_documents(rag_results)
+        
+        # Create a new messages list with the same content
+        new_messages = messages.copy()
+        
+        # If the last message is from the user, add the RAG context to the system message
+        if new_messages and new_messages[-1]["role"] == "user":
+            # Find a system message if one exists
+            system_idx = None
+            for i, msg in enumerate(new_messages):
+                if msg["role"] == "system":
+                    system_idx = i
+                    break
+            
+            # If there's a system message, add the context to it
+            if system_idx is not None:
+                new_messages[system_idx]["content"] = new_messages[system_idx]["content"] + "\n\n参考资料:\n" + context_str
+            else:
+                # Otherwise, add a new system message with the context
+                new_messages.insert(0, {
+                    "role": "system",
+                    "content": "请基于以下参考资料回答用户的问题：\n\n" + context_str
+                })
+        
+        return new_messages
+    
+    async def _prepare_messages(self, messages: List[dict], role_id: str) -> List[dict]:
+        """
+        Prepare messages for the LLM
+        
+        Args:
+            messages: List of messages
+            role_id: Used role ID
+            
+        Returns:
+            Updated list of messages
+        """
+        # Ensure the service is initialized
+        await self._ensure_initialized()
+        
+        # 获取角色信息
+        role_info = await self.get_role_info(role_id)
+        if not role_info:
+            logger.warning(f"未找到角色: {role_id}")
+            return messages
+        
+        # 构建完整的消息列表
+        complete_messages = []
+        
+        # 添加系统消息
+        complete_messages.append({"role": "system", "content": role_info["system_prompt"]})
+        
+        # 获取历史消息（如果有会话ID和用户ID）
+        if role_id:
+            try:
+                # 检查会话是否存在
+                session_exists = await self.verify_session_exists(role_id, role_id)
+                if not session_exists:
+                    logger.warning(f"会话 {role_id} 不存在，跳过历史消息加载")
+                else:
+                    logger.info(f"开始获取会话 {role_id} 的历史消息")
+                    
+                    # 使用 CustomSession 获取会话信息
+                    session_data = await CustomSession.get_session_by_id(role_id)
+                    logger.info(f"获取会话数据: {session_data is not None}")
+                    
+                    if session_data:
+                        # 构建Redis消息键
+                        redis_key = f"messages:{role_id}:{role_id}"
+                        logger.info(f"准备从Redis获取消息，键名: {redis_key}")
+                        
+                        # 从内存管理器获取Redis客户端
+                        from app.memory.memory_manager import get_memory_manager
+                        memory_manager = await get_memory_manager()
+                        
+                        if memory_manager and memory_manager.short_term_memory and memory_manager.short_term_memory.redis:
+                            redis_client = memory_manager.short_term_memory.redis
+                            
+                            # 检查消息键是否存在
+                            key_exists = await redis_client.exists(redis_key)
+                            logger.info(f"Redis消息键 {redis_key} 存在: {key_exists}")
+                
+                            if key_exists:
+                                # 获取消息记录
+                                messages_data = await redis_client.lrange(redis_key, 0, -1)
+                                logger.info(f"从Redis获取到 {len(messages_data)} 条消息")
+                                
+                                history = []
+                                
+                                # 解析消息记录
+                                for msg_data in messages_data:
+                                    try:
+                                        msg = json.loads(msg_data)
+                                        if msg.get("role") in ["user", "assistant", "system"]:
+                                            history.append(msg)
+                                    except json.JSONDecodeError:
+                                        logger.warning(f"解析消息失败: {msg_data[:100]}")
+                                        continue
+                                    
+                        # 将历史消息添加到完整消息列表中
+                                logger.info(f"成功解析 {len(history)} 条有效历史消息")
+                            for msg in history:
+                                complete_messages.append({
+                                    "role": msg.get("role", "user"),
+                                    "content": msg.get("content", "")
+                                })
+                            else:
+                                logger.warning(f"Redis中不存在消息键 {redis_key}")
+                        else:
+                            logger.warning("Redis客户端不可用，无法获取历史消息")
+                    else:
+                        logger.warning(f"在MongoDB中找不到会话 {role_id}")
+            except Exception as e:
+                logger.error(f"获取历史消息出错: {str(e)}", exc_info=True)
+                # 如果获取历史消息失败，继续处理但记录错误
+        
+        # 添加当前消息
+        for msg in messages:
+            complete_messages.append({
+                "role": msg.get("role", "user"),
+                "content": msg.get("content", "")
+            })
+        
+        return complete_messages 

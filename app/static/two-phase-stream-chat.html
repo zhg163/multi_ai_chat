@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>两阶段流式API演示</title>
+    <title>流式API演示</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/css/bootstrap.min.css" rel="stylesheet">
     <style>
         body {
@@ -99,7 +99,7 @@
 </head>
 <body>
     <div class="container">
-        <h1 class="mb-4">两阶段流式API演示</h1>
+        <h1 class="mb-4">流式API演示</h1>
         
         <div class="row">
             <div class="col-md-8">
@@ -121,19 +121,6 @@
                 
                 <button id="sendBtn" class="btn btn-primary">发送</button>
                 
-                <div id="phase2Container" class="mt-3">
-                    <h4>确认AI回复是否满意</h4>
-                    <p>这是第二阶段的反馈，如果您对这个回答满意，点击接受；如果不满意，点击拒绝，系统会尝试改进回答。</p>
-                    <div id="feedbackBtns">
-                        <button id="acceptBtn" class="btn btn-success">接受</button>
-                        <button id="rejectBtn" class="btn btn-danger">拒绝</button>
-                    </div>
-                </div>
-                
-                <div id="improvingIndicator" class="improving-indicator">
-                    正在基于您的反馈生成改进的回答...
-                </div>
-                
                 <div id="errorContainer" class="alert alert-danger mt-3">
                     <strong>错误：</strong> <span id="errorMessage"></span>
                 </div>
@@ -143,15 +130,6 @@
                 <div class="info-panel">
                     <h4>角色信息</h4>
                     <div id="roleInfo"></div>
-                </div>
-                
-                <div class="info-panel">
-                    <h4>使用说明</h4>
-                    <p>1. 点击"创建会话"按钮创建一个新的聊天会话</p>
-                    <p>2. 在文本框输入消息并发送</p>
-                    <p>3. 系统会自动选择合适的角色进行回复</p>
-                    <p>4. 收到回复后，您可以评价回复质量</p>
-                    <p>5. 如果不满意，系统会尝试改进回复</p>
                 </div>
                 
                 <button id="createSessionBtn" class="btn btn-outline-primary w-100 mb-3">创建会话</button>
@@ -168,20 +146,140 @@
             const sendBtn = document.getElementById('sendBtn');
             const errorContainer = document.getElementById('errorContainer');
             const errorMessage = document.getElementById('errorMessage');
-            const phase2Container = document.getElementById('phase2Container');
-            const acceptBtn = document.getElementById('acceptBtn');
-            const rejectBtn = document.getElementById('rejectBtn');
-            const createSessionBtn = document.getElementById('createSessionBtn');
-            const clearChatBtn = document.getElementById('clearChatBtn');
             const sessionInfo = document.getElementById('sessionInfo');
             const roleInfo = document.getElementById('roleInfo');
             const typingIndicator = document.getElementById('typingIndicator');
-            const improvingIndicator = document.getElementById('improvingIndicator');
+            const createSessionBtn = document.getElementById('createSessionBtn');
+            const clearChatBtn = document.getElementById('clearChatBtn');
             
             // 状态变量
             let currentSessionId = null;
             let lastMessageId = null;
             let currentEventSource = null;
+            
+            // 解析URL参数函数
+            function getUrlParams() {
+                const params = {};
+                const queryString = window.location.search;
+                const urlParams = new URLSearchParams(queryString);
+                
+                for (const [key, value] of urlParams.entries()) {
+                    params[key] = value;
+                }
+                
+                return params;
+            }
+            
+            // 检查并处理URL参数
+            function processUrlParams() {
+                const params = getUrlParams();
+                console.log("URL参数:", params);
+                
+                // 检查displayParams参数是否为true
+                if (params.displayParams === "true" && params.session_id && params.userName && params.userId) {
+                    // 设置会话ID
+                    currentSessionId = params.session_id;
+                    
+                    // 更新会话信息显示
+                    sessionInfo.innerHTML = `
+                        <strong>会话ID:</strong> ${params.session_id}<br>
+                        <strong>用户:</strong> ${params.userName}<br>
+                        <strong>用户ID:</strong> ${params.userId}<br>
+                        <strong>来源:</strong> URL参数
+                    `;
+                    
+                    // 禁用创建会话按钮
+                    createSessionBtn.textContent = "已从URL加载会话";
+                    createSessionBtn.disabled = true;
+                    
+                    // 添加欢迎消息
+                    addSystemMessage(`会话已从URL加载，会话ID: ${params.session_id.substring(0, 8)}...`);
+                    
+                    // 获取会话的角色信息
+                    fetchSessionRoles(params.session_id);
+                    
+                    // 返回true表示已处理URL参数
+                    return true;
+                }
+                
+                // 返回false表示未处理URL参数
+                return false;
+            }
+            
+            // 获取会话的角色信息
+            async function fetchSessionRoles(sessionId) {
+                try {
+                    // 显示加载状态
+                    roleInfo.innerHTML = '<div class="text-center"><div class="spinner-border text-primary" role="status"></div><p>正在加载角色信息...</p></div>';
+                    
+                    // 获取会话详情
+                    const response = await fetch(`/api/custom-sessions/${sessionId}`);
+                    if (!response.ok) {
+                        throw new Error('获取会话详情失败');
+                    }
+                    
+                    const sessionData = await response.json();
+                    console.log('会话详情:', sessionData);
+                    
+                    // 检查是否有角色数据
+                    if (sessionData.roles && sessionData.roles.length > 0) {
+                        // 更新角色信息显示
+                        roleInfo.innerHTML = sessionData.roles.map(role => `
+                            <div class="role-info">
+                                <strong>${role.role_name || '未命名角色'}</strong><br>
+                                <small class="text-muted">角色ID: ${role.role_id}</small><br>
+                                ${role.system_prompt ? 
+                                    `<div class="small mt-2" style="max-height: 150px; overflow-y: auto; background-color: #f8f9fa; padding: 8px; border-radius: 4px; font-family: monospace;">${role.system_prompt}</div>` 
+                                    : '<small class="text-muted">无系统提示词</small>'}
+                            </div>
+                        `).join('');
+                    } else {
+                        // 如果没有找到角色信息
+                        roleInfo.innerHTML = '<div class="alert alert-warning">未找到角色信息</div>';
+                        
+                        // 尝试获取角色列表作为备选方案
+                        fetchRoleList();
+                    }
+                } catch (error) {
+                    console.error('获取会话角色信息失败:', error);
+                    roleInfo.innerHTML = `<div class="alert alert-danger">获取角色信息失败: ${error.message}</div>`;
+                    
+                    // 尝试获取角色列表作为备选方案
+                    fetchRoleList();
+                }
+            }
+            
+            // 获取角色列表（备选方案）
+            async function fetchRoleList() {
+                try {
+                    const response = await fetch('/api/roles/?limit=5');
+                    if (!response.ok) {
+                        throw new Error('获取角色列表失败');
+                    }
+                    
+                    const roles = await response.json();
+                    if (roles && roles.length > 0) {
+                        roleInfo.innerHTML = `
+                            <div class="alert alert-info mb-3">未找到会话关联角色，显示系统角色列表：</div>
+                            ${roles.map(role => `
+                                <div class="role-info">
+                                    <strong>${role.name || '未命名角色'}</strong><br>
+                                    <small class="text-muted">角色ID: ${role._id}</small><br>
+                                    ${role.system_prompt ? 
+                                        `<div class="small mt-2" style="max-height: 150px; overflow-y: auto; background-color: #f8f9fa; padding: 8px; border-radius: 4px; font-family: monospace;">${role.system_prompt}</div>` 
+                                        : '<small class="text-muted">无系统提示词</small>'}
+                                </div>
+                            `).join('')}
+                        `;
+                    }
+                } catch (error) {
+                    console.error('获取角色列表失败:', error);
+                    // 已经显示了错误，不再添加新错误
+                }
+            }
+            
+            // 尝试处理URL参数，如果处理失败，则使用默认行为
+            const paramsProcessed = processUrlParams();
             
             // 初始化，创建一个新会话
             async function createSession() {
@@ -378,9 +476,6 @@
                                 eventSource.close();
                                 currentEventSource = null;
                                 
-                                // 显示反馈界面
-                                phase2Container.style.display = 'block';
-                                
                                 // 隐藏正在输入指示器
                                 typingIndicator.style.display = 'none';
                                 sendBtn.disabled = false;
@@ -418,121 +513,9 @@
                 }
             }
             
-            // 发送反馈
-            async function sendFeedback(isAccepted) {
-                if (!lastMessageId) return;
-                
-                acceptBtn.disabled = true;
-                rejectBtn.disabled = true;
-                phase2Container.style.display = 'none';
-                
-                // 如果接受，直接显示确认信息并返回
-                if (isAccepted) {
-                    try {
-                        const response = await fetch(`/api/two-phase-stream/feedback?session_id=${encodeURIComponent(currentSessionId)}&message_id=${encodeURIComponent(lastMessageId)}&is_accepted=true`);
-                        
-                        if (!response.ok) {
-                            throw new Error('发送反馈失败');
-                        }
-                        
-                        addSystemMessage("✓ 已接受回复");
-                        acceptBtn.disabled = false;
-                        rejectBtn.disabled = false;
-                        
-                    } catch (error) {
-                        showError('发送反馈失败: ' + error.message);
-                        acceptBtn.disabled = false;
-                        rejectBtn.disabled = false;
-                    }
-                    
-                    return;
-                }
-                
-                // 否则，显示改进中指示器
-                improvingIndicator.style.display = 'block';
-                
-                // 关闭之前的EventSource连接
-                if (currentEventSource) {
-                    currentEventSource.close();
-                    currentEventSource = null;
-                }
-                
-                // 创建改进回复的消息容器
-                addSystemMessage("⚠ 已拒绝回复，生成改进版本");
-                const improvedMessagePlaceholder = addAssistantMessage("", "改进回复");
-                
-                try {
-                    // 使用EventSource接收流式响应
-                    const url = `/api/two-phase-stream/feedback?session_id=${encodeURIComponent(currentSessionId)}&message_id=${encodeURIComponent(lastMessageId)}&is_accepted=false`;
-                    const eventSource = new EventSource(url);
-                    currentEventSource = eventSource;
-                    
-                    // 存储流式响应的内容
-                    let improvedResponseText = '';
-                    
-                    eventSource.onmessage = function(event) {
-                        try {
-                            const data = JSON.parse(event.data);
-                            console.log('接收到改进事件:', data);
-                            
-                            // 处理内容片段
-                            if (data.type === 'content') {
-                                improvedResponseText += data.content;
-                                improvedMessagePlaceholder.textContent = improvedResponseText;
-                                chatContainer.scrollTop = chatContainer.scrollHeight;
-                            }
-                            
-                            // 处理完成信号
-                            else if (data.type === 'complete') {
-                                // 关闭连接
-                                eventSource.close();
-                                currentEventSource = null;
-                                
-                                // 隐藏改进中指示器
-                                improvingIndicator.style.display = 'none';
-                                acceptBtn.disabled = false;
-                                rejectBtn.disabled = false;
-                            }
-                            
-                            // 处理错误
-                            else if (data.type === 'error') {
-                                showError('生成改进响应时出错: ' + data.message);
-                                eventSource.close();
-                                currentEventSource = null;
-                                improvingIndicator.style.display = 'none';
-                                acceptBtn.disabled = false;
-                                rejectBtn.disabled = false;
-                            }
-                        } catch (e) {
-                            console.error('解析改进事件数据时出错:', e);
-                        }
-                    };
-                    
-                    eventSource.onerror = function(error) {
-                        console.error('改进EventSource错误:', error);
-                        eventSource.close();
-                        currentEventSource = null;
-                        improvingIndicator.style.display = 'none';
-                        acceptBtn.disabled = false;
-                        rejectBtn.disabled = false;
-                        
-                        if (improvedResponseText.length === 0) {
-                            showError('改进响应连接中断或请求失败');
-                        }
-                    };
-                    
-                } catch (error) {
-                    showError('发送改进反馈失败: ' + error.message);
-                    improvingIndicator.style.display = 'none';
-                    acceptBtn.disabled = false;
-                    rejectBtn.disabled = false;
-                }
-            }
-            
             // 清空聊天记录
             function clearChat() {
                 chatContainer.innerHTML = '';
-                phase2Container.style.display = 'none';
                 lastMessageId = null;
                 
                 // 如果创建了会话，添加重置消息
@@ -551,8 +534,6 @@
                 }
             });
             
-            acceptBtn.addEventListener('click', () => sendFeedback(true));
-            rejectBtn.addEventListener('click', () => sendFeedback(false));
             createSessionBtn.addEventListener('click', createSession);
             clearChatBtn.addEventListener('click', clearChat);
         });

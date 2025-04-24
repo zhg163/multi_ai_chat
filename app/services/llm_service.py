@@ -537,7 +537,7 @@ class LLMService:
         max_tries=1,
         factor=2
     )
-    async def _make_api_request(self, endpoint: str, headers: Dict[str, str], data: Dict) -> aiohttp.ClientResponse:
+    async def _make_api_request(self, endpoint: str, headers: Dict[str, str], data: Dict) -> Dict:
         """
         进行API请求
         
@@ -547,7 +547,7 @@ class LLMService:
             data: 请求数据
             
         Returns:
-            API响应
+            响应数据
         """
         # 记录请求信息（脱敏）
         logger.info(f"Sending request to endpoint: {endpoint}")
@@ -578,26 +578,34 @@ class LLMService:
                         logger.error(f"请求失败详情 - 请求数据: {json.dumps(data, ensure_ascii=False)[:500]}")
                         response.raise_for_status()  # 抛出错误以触发重试机制
                     
-                    # 创建响应内容副本，以便在会话关闭后使用
-                    cloned_response = aiohttp.ClientResponse(
-                        response.method,
-                        response.url,
-                        writer=None,
-                        continue100=None,
-                        timer=None,
-                        request_info=response.request_info,
-                        traces=[],
-                        loop=session.loop,
-                        session=None
-                    )
-                    
-                    # 复制响应的关键属性
-                    cloned_response.status = response.status
-                    cloned_response.reason = response.reason
-                    cloned_response.headers = response.headers.copy()
-                    cloned_response._body = await response.read()
-                    
-                    return cloned_response
+                    # 读取响应内容
+                    response_body = await response.read()
+                    response_status = response.status
+                    response_headers = {k: v for k, v in response.headers.items()}  # 转换为普通字典
+                    response_reason = response.reason
+                    response_content_type = response.headers.get('Content-Type', '')
+
+                    # 创建自定义响应对象（不使用ClientResponse克隆）
+                    class SimpleResponse:
+                        def __init__(self):
+                            self.status = response_status
+                            self.reason = response_reason
+                            self.headers = response_headers
+                            self._body = response_body
+                            self._content_type = response_content_type
+                        
+                        async def read(self):
+                            return self._body
+                        
+                        async def text(self):
+                            return self._body.decode('utf-8')
+                        
+                        async def json(self):
+                            import json
+                            return json.loads(await self.text())
+
+                    # 返回简化的响应对象
+                    return SimpleResponse()
                 
         except aiohttp.ClientError as e:
             logger.error(f"API请求客户端错误: {str(e)}")

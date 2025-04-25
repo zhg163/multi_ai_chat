@@ -666,9 +666,14 @@ class LLMService:
             provider = used_config.get("provider", "deepseek")
             api_key = used_config.get("api_key")
             if not api_key:
-                api_key = os.environ.get(f"{provider.upper()}_API_KEY", "")
-                if provider.lower() == "deepseek" and api_key and not api_key.startswith("sk-"):
-                    api_key = f"sk-{api_key}"
+                # 添加防御性检查，确保provider不是None
+                if provider is not None:
+                    api_key = os.environ.get(f"{provider.upper()}_API_KEY", "")
+                    if provider.lower() == "deepseek" and api_key and not api_key.startswith("sk-"):
+                        api_key = f"sk-{api_key}"
+                else:
+                    logger.error("提供商为None，无法获取API密钥")
+                    return LLMResponse(content="配置错误：提供商为None，无法获取API密钥", finish_reason="error")
         else:
             # 使用LLMConfig对象
             provider = used_config.provider.value if hasattr(used_config.provider, 'value') else str(used_config.provider)
@@ -677,12 +682,16 @@ class LLMService:
         # 检查API密钥是否有效
         if not api_key:
             logger.error(f"缺少{provider}的API密钥")
-            raise ValueError(f"缺少{provider}的API密钥")
+            return LLMResponse(content=f"配置错误：缺少{provider}的API密钥", finish_reason="error")
         
         # 准备API请求
-        endpoint = self._get_api_endpoint(used_config)
-        headers = self._get_request_headers(provider, api_key)
-        data = self._prepare_request_data(processed_messages, used_config)
+        try:
+            endpoint = self._get_api_endpoint(used_config)
+            headers = self._get_request_headers(provider, api_key)
+            data = self._prepare_request_data(processed_messages, used_config)
+        except Exception as e:
+            logger.error(f"准备API请求时出错: {str(e)}", exc_info=True)
+            return LLMResponse(content=f"API请求准备失败: {str(e)}", finish_reason="error")
         
         try:
             # 发送API请求
@@ -703,14 +712,14 @@ class LLMService:
                 response_json = await response.json()
                 return self._parse_response(response_json, used_config)
             except (json.JSONDecodeError, aiohttp.ContentTypeError) as json_err:
-                logger.error(f"解析响应JSON时出错: {str(json_err)}")
+                logger.error(f"解析响应JSON时出错: {str(json_err)}", exc_info=True)
                 # 尝试读取原始响应内容作为备用
                 try:
                     response_text = await response.text()
                     logger.error(f"原始响应内容: {response_text[:500]}")
                     error_msg = f"无法解析API响应: {str(json_err)}"
                 except Exception as text_err:
-                    logger.error(f"读取响应内容时出错: {str(text_err)}")
+                    logger.error(f"读取响应内容时出错: {str(text_err)}", exc_info=True)
                     error_msg = "无法读取或解析API响应"
                 
                 return LLMResponse(content=error_msg, finish_reason="error")
@@ -1472,6 +1481,47 @@ class LLMService:
                 return None
             
         return ResponseParser(config)
+
+    def _get_provider_string(self, provider_name=None):
+        """Get the correct provider string to use for API calls."""
+        # 添加防御性检查
+        if provider_name is None:
+            # 获取默认提供商，确保不为None
+            if hasattr(self.default_config, 'provider'):
+                if hasattr(self.default_config.provider, 'value'):
+                    provider_name = self.default_config.provider.value
+                else:
+                    provider_name = str(self.default_config.provider)
+            else:
+                provider_name = "deepseek"  # 强制设置一个默认值
+            
+            logger.debug(f"Provider is None, using default: {provider_name}")
+        
+        # 确保provider_name是字符串类型
+        if not isinstance(provider_name, str):
+            try:
+                provider_name = str(provider_name)
+            except Exception as e:
+                logger.error(f"无法将provider_name转换为字符串: {str(e)}", exc_info=True)
+                provider_name = "deepseek"  # 强制设置一个默认值
+        
+        # 原始逻辑保持不变
+        provider = provider_name.upper()
+        if provider == "AZURE_OPENAI":
+            return "AZURE_OPENAI"
+        elif provider == "OPENAI":
+            return "OPENAI"
+        elif provider == "HUGGINGFACE":
+            return "HUGGINGFACE"
+        elif provider == "DEEPSEEK":
+            return "DEEPSEEK"
+        elif provider == "CLAUDE":
+            return "CLAUDE"
+        elif provider == "ZHIPU":
+            return "ZHIPU"
+        else:
+            logger.warning(f"Unknown provider: {provider_name}, using default.")
+            return "DEEPSEEK"  # 直接返回固定值而不是依赖self.default_config
 
 def get_api_key(provider):
     """

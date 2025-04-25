@@ -14,24 +14,24 @@
             background-color: #f8f9fa;
             color: #333;
         }
-        
+
         .container {
             max-width: 1200px;
             margin: 0 auto;
             padding: 20px;
         }
-        
+
         h1, h2, h3 {
             color: #2c3e50;
         }
-        
+
         /* 三列布局 */
         .three-column-layout {
             display: flex;
             gap: 20px;
             margin-top: 20px;
         }
-        
+
         .column {
             flex: 1;
             background-color: white;
@@ -39,7 +39,7 @@
             padding: 15px;
             box-shadow: 0 2px 4px rgba(0,0,0,0.1);
         }
-        
+
         /* 按钮样式 */
         .btn {
             display: inline-block;
@@ -53,32 +53,32 @@
             transition: background-color 0.3s;
             text-decoration: none;
         }
-        
+
         .btn:hover {
             background-color: #45a049;
         }
-        
+
         .btn-danger {
             background-color: #f44336;
         }
-        
+
         .btn-danger:hover {
             background-color: #d32f2f;
         }
-        
+
         .btn-primary {
             background-color: #2196F3;
         }
-        
+
         .btn-primary:hover {
             background-color: #0b7dda;
         }
-        
+
         /* 表单样式 */
         .form-group {
             margin-bottom: 15px;
         }
-        
+
         .form-control {
             display: block;
             width: 100%;
@@ -92,19 +92,19 @@
             border-radius: 4px;
             transition: border-color 0.15s ease-in-out, box-shadow 0.15s ease-in-out;
         }
-        
+
         .form-control:focus {
             border-color: #80bdff;
             outline: 0;
             box-shadow: 0 0 0 0.2rem rgba(0, 123, 255, 0.25);
         }
-        
+
         label {
             display: block;
             margin-bottom: 5px;
             font-weight: 600;
         }
-        
+
         /* 会话列表样式 */
         .session-list {
             display: flex;
@@ -114,7 +114,7 @@
             max-height: 600px;
             overflow-y: auto;
         }
-        
+
         .session-item {
             display: flex;
             align-items: center;
@@ -125,38 +125,38 @@
             transition: transform 0.2s, box-shadow 0.2s;
             cursor: pointer;
         }
-        
+
         .session-item:hover {
             transform: translateY(-2px);
             box-shadow: 0 4px 8px rgba(0, 0, 0, 0.15);
         }
-        
+
         .session-info {
             flex: 1;
         }
-        
+
         .session-title {
             font-weight: 600;
             font-size: 16px;
             margin-bottom: 5px;
         }
-        
+
         .session-meta {
             font-size: 12px;
             color: #6c757d;
         }
-        
+
         .session-actions {
             display: flex;
             gap: 10px;
         }
-        
+
         /* 角色和用户列表样式 */
         .role-list, .user-list {
             max-height: 400px;
             overflow-y: auto;
         }
-        
+
         .role-item, .user-item {
             padding: 10px;
             margin-bottom: 5px;
@@ -165,16 +165,16 @@
             cursor: pointer;
             transition: background-color 0.2s;
         }
-        
+
         .role-item:hover, .user-item:hover {
             background-color: #e9ecef;
         }
-        
+
         .role-item.selected, .user-item.selected {
             background-color: #cce5ff;
             border-left: 3px solid #0d6efd;
         }
-        
+
         /* 多选样式 */
         .role-item label {
             display: flex;
@@ -182,11 +182,11 @@
             font-weight: normal;
             cursor: pointer;
         }
-        
+
         .role-item input[type="checkbox"] {
             margin-right: 8px;
         }
-        
+
         /* Toast 提示样式 */
         .toast {
             position: fixed;
@@ -203,23 +203,23 @@
             box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
             animation: fadein 0.5s, fadeout 0.5s 2.5s;
         }
-        
+
         .toast-success {
             background-color: #4CAF50;
         }
-        
+
         .toast-error {
             background-color: #f44336;
         }
-        
+
         .toast-warning {
             background-color: #ff9800;
         }
-        
+
         .toast-info {
             background-color: #2196F3;
         }
-        
+
         .toast-header {
             display: flex;
             justify-content: space-between;
@@ -227,11 +227,11 @@
             margin-bottom: 8px;
             font-weight: bold;
         }
-        
+
         .toast-body {
             font-size: 14px;
         }
-        
+
         .close-btn {
             background: none;
             border: none;
@@ -240,21 +240,21 @@
             cursor: pointer;
             padding: 0 5px;
         }
-        
+
         .fadeout {
             animation: fadeout 0.5s forwards;
         }
-        
+
         @keyframes fadein {
             from {opacity: 0; transform: translateY(-20px);}
             to {opacity: 1; transform: translateY(0);}
         }
-        
+
         @keyframes fadeout {
             from {opacity: 1; transform: translateY(0);}
             to {opacity: 0; transform: translateY(-20px);}
         }
-        
+
         /* 加载指示器样式 */
         .loading-overlay {
             position: fixed;
@@ -269,7 +269,7 @@
             align-items: center;
             z-index: 9999;
         }
-        
+
         .loading-spinner {
             border: 5px solid #f3f3f3;
             border-top: 5px solid #3498db;
@@ -278,18 +278,18 @@
             height: 40px;
             animation: spin 1s linear infinite;
         }
-        
+
         .loading-message {
             color: white;
             margin-top: 10px;
             font-size: 16px;
         }
-        
+
         @keyframes spin {
             0% { transform: rotate(0deg); }
             100% { transform: rotate(360deg); }
         }
-        
+
         /* 消息样式 */
         .message {
             padding: 10px 15px;
@@ -297,54 +297,54 @@
             border-radius: 4px;
             display: none;
         }
-        
+
         .message.success {
             background-color: #d4edda;
             color: #155724;
             border: 1px solid #c3e6cb;
         }
-        
+
         .message.error {
             background-color: #f8d7da;
             color: #721c24;
             border: 1px solid #f5c6cb;
         }
-        
+
         .message.info {
             background-color: #d1ecf1;
             color: #0c5460;
             border: 1px solid #bee5eb;
         }
-        
+
         /* 响应式布局 */
         @media (max-width: 768px) {
             .container {
                 padding: 10px;
             }
-            
+
             .three-column-layout {
                 flex-direction: column;
             }
-            
+
             .session-item {
                 flex-direction: column;
                 align-items: flex-start;
             }
-            
+
             .session-actions {
                 margin-top: 10px;
                 width: 100%;
                 justify-content: flex-end;
             }
         }
-        
+
         /* 创建按钮 */
         .action-buttons {
             margin-top: 15px;
             display: flex;
             justify-content: center;
         }
-        
+
         /* 添加一些CSS样式 */
         .session-id {
             font-size: 11px;
@@ -366,17 +366,16 @@
 <body>
     <div class="container">
         <h1>多AI聊天 - 会话管理</h1>
-        
+
         <!-- 导航栏 -->
         <div class="nav-bar" style="margin-bottom: 20px; display: flex; gap: 10px; justify-content: center;">
-            <a href="stream_example.html" class="btn btn-primary">主界面</a>
             <a href="session_creator.html" class="btn btn-primary">创建自定义会话</a>
             <a href="init_users.html" class="btn btn-primary">初始化用户</a>
             <a href="init_roles.html" class="btn btn-primary">初始化角色</a>
         </div>
-        
+
         <div id="message" class="message"></div>
-        
+
         <div class="three-column-layout">
             <!-- 角色选择列 - 支持多选 -->
             <div class="column">
@@ -387,7 +386,7 @@
                     <div class="loading">正在加载角色...</div>
                 </div>
             </div>
-            
+
             <!-- 用户选择列 - 单选 -->
             <div class="column">
                 <h2>用户选择</h2>
@@ -397,13 +396,10 @@
                     <div class="loading">正在加载用户...</div>
                 </div>
             </div>
-            
+
             <!-- 会话列表列 -->
             <div class="column">
                 <h2>会话列表</h2>
-                <div class="action-buttons">
-                    <button id="createSessionBtn" class="btn btn-primary" disabled>创建新会话</button>
-                </div>
                 <div id="sessionList" class="session-list">
                     <!-- 会话列表会动态生成 -->
                     <div class="loading">正在加载会话...</div>
@@ -411,7 +407,7 @@
             </div>
         </div>
     </div>
-    
+
     <script>
         // 全局变量
         let roles = [];
@@ -419,28 +415,28 @@
         let sessions = [];
         let selectedRoleIds = [];
         let selectedUserId = null;
-        
+
         // 页面加载完成后执行
         document.addEventListener('DOMContentLoaded', function() {
             console.log('Page loaded, initializing...');
-            
+
             // 初始化变量
             roles = [];
             users = [];
             sessions = [];
             selectedRoleIds = [];
             selectedUserId = null;
-            
+
             // 确保消息元素存在
             createMessageElement();
-            
+
             // 初始化页面数据
             initPage();
-            
+
             // 绑定创建会话按钮事件
             document.getElementById('createSessionBtn').addEventListener('click', createSession);
         });
-        
+
         // 创建消息显示元素
         function createMessageElement() {
             if (!document.getElementById('message')) {
@@ -451,11 +447,11 @@
                 document.querySelector('.container').prepend(messageEl);
             }
         }
-        
+
         // 显示加载状态
         function showLoading(message = '加载中...') {
             let loadingEl = document.getElementById('loadingIndicator');
-            
+
             if (!loadingEl) {
                 loadingEl = document.createElement('div');
                 loadingEl.id = 'loadingIndicator';
@@ -470,7 +466,7 @@
                 loadingEl.style.display = 'flex';
             }
         }
-        
+
         // 隐藏加载状态
         function hideLoading() {
             const loadingEl = document.getElementById('loadingIndicator');
@@ -478,18 +474,18 @@
                 loadingEl.style.display = 'none';
             }
         }
-        
+
         // 显示消息
         function showMessage(text, type) {
             // 确保元素存在
             createMessageElement();
-            
+
             const messageEl = document.getElementById('message');
             if (messageEl) {
             messageEl.textContent = text;
             messageEl.className = `message ${type}`;
             messageEl.style.display = 'block';
-            
+
             // 5秒后自动隐藏
             setTimeout(() => {
                 messageEl.style.display = 'none';
@@ -500,27 +496,27 @@
                 alert(`${text} (${type})`);
             }
         }
-        
+
         // 初始化页面
         async function initPage() {
             try {
                 // 显示加载
                 showLoading('正在加载数据...');
-                
+
                 // 获取所有角色
                 const rolesResponse = await fetch('/api/roles/');
                 if (!rolesResponse.ok) {
                     throw new Error('获取角色列表失败');
                 }
                 roles = await rolesResponse.json();
-                
+
                 // 获取用户
                 const usersResponse = await fetch('/api/users/');
                 if (!usersResponse.ok) {
                     throw new Error('获取用户列表失败');
                 }
                 users = await usersResponse.json();
-                
+
                 // 获取会话
                 const sessionsResponse = await fetch('/api/custom-sessions/list?page=1&limit=100');
                 if (!sessionsResponse.ok) {
@@ -529,12 +525,12 @@
                 const sessionsData = await sessionsResponse.json();
                 console.log('获取到的会话列表数据:', sessionsData);
                 sessions = Array.isArray(sessionsData.data) ? sessionsData.data : [];
-                
+
                 // 渲染页面
                 renderRoleList();
                 renderUserList();
                 renderSessionList();
-                
+
                 console.log('页面初始化完成');
             } catch (error) {
                 console.error('初始化页面失败:', error);
@@ -544,28 +540,28 @@
                 hideLoading();
             }
         }
-        
+
         // 渲染角色列表 - 支持多选
         function renderRoleList() {
             const roleList = document.getElementById('roleList');
             roleList.innerHTML = '';
-            
+
             if (!Array.isArray(roles) || roles.length === 0) {
                 roleList.innerHTML = '<div class="empty-message">暂无角色数据</div>';
                 return;
             }
-            
+
             roles.forEach(role => {
                 const roleItem = document.createElement('div');
                 roleItem.className = 'role-item';
                 if (selectedRoleIds.includes(role._id)) {
                     roleItem.classList.add('selected');
                 }
-                
+
                 // 获取角色描述和系统提示词（如果有）
                 const description = role.description || '';
                 const systemPrompt = role.system_prompt || '';
-                
+
                 roleItem.innerHTML = `
                     <label>
                         <input type="checkbox" class="role-checkbox" value="${role._id}" ${selectedRoleIds.includes(role._id) ? 'checked' : ''}>
@@ -574,7 +570,7 @@
                     <div class="role-description">${description}</div>
                     ${systemPrompt ? `<div class="role-system-prompt" style="font-size: 11px; color: #666; margin-top: 5px; font-style: italic; cursor: pointer;" title="点击查看完整提示词">系统提示词: ${systemPrompt.substring(0, 50)}${systemPrompt.length > 50 ? '...' : ''}</div>` : ''}
                 `;
-                
+
                 // 添加角色选择事件
                 const checkbox = roleItem.querySelector('.role-checkbox');
                 checkbox.addEventListener('change', function() {
@@ -589,11 +585,11 @@
                         selectedRoleIds = selectedRoleIds.filter(id => id !== role._id);
                         roleItem.classList.remove('selected');
                     }
-                    
+
                     console.log('已选角色IDs:', selectedRoleIds);
                     forceUpdateButtonState();
                 });
-                
+
                 // 添加系统提示词点击事件，显示完整内容
                 if (systemPrompt) {
                     const promptElement = roleItem.querySelector('.role-system-prompt');
@@ -602,11 +598,11 @@
                         showPromptDetail(role.name, systemPrompt);
                     });
                 }
-                
+
                 roleList.appendChild(roleItem);
             });
         }
-        
+
         // 显示角色系统提示词详情
         function showPromptDetail(roleName, systemPrompt) {
             // 创建弹窗元素
@@ -624,7 +620,7 @@
                 align-items: center;
                 z-index: 9999;
             `;
-            
+
             // 创建弹窗内容
             const modalContent = document.createElement('div');
             modalContent.className = 'modal-content';
@@ -637,7 +633,7 @@
                 overflow-y: auto;
                 box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
             `;
-            
+
             // 添加标题和内容
             modalContent.innerHTML = `
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
@@ -648,75 +644,75 @@
                     ${systemPrompt}
                 </div>
             `;
-            
+
             // 添加到DOM
             modal.appendChild(modalContent);
             document.body.appendChild(modal);
-            
+
             // 添加关闭事件
             modal.addEventListener('click', function(e) {
                 if (e.target === modal) {
                     document.body.removeChild(modal);
                 }
             });
-            
+
             const closeBtn = modalContent.querySelector('.close-btn');
             closeBtn.addEventListener('click', function() {
                 document.body.removeChild(modal);
             });
         }
-        
+
         // 渲染用户列表 - 单选
         function renderUserList() {
             const userList = document.getElementById('userList');
             userList.innerHTML = '';
-            
+
             if (!Array.isArray(users) || users.length === 0) {
                 userList.innerHTML = '<div class="empty-message">暂无用户数据</div>';
                 return;
             }
-            
+
             users.forEach(user => {
                 const userItem = document.createElement('div');
                 userItem.className = 'user-item';
                 if (selectedUserId === user._id) {
                     userItem.classList.add('selected');
                 }
-                
+
                 const userName = user.name || user.username || '未命名用户';
-                
+
                 userItem.innerHTML = `
                     <div class="user-name">${userName}</div>
                     <div class="user-email">${user.email || ''}</div>
                 `;
-                
+
                 // 添加用户选择事件
                 userItem.addEventListener('click', function() {
                     // 移除所有其他用户的选中状态
                     document.querySelectorAll('.user-item').forEach(item => {
                         item.classList.remove('selected');
                     });
-            
+
                     // 设置当前用户为选中状态
                     userItem.classList.add('selected');
                     selectedUserId = user._id;
-                    
+
                     console.log('已选用户ID:', selectedUserId);
             forceUpdateButtonState();
                 });
-                
+
                 userList.appendChild(userItem);
             });
         }
-        
+
         // 强制更新按钮状态 - 确保按钮正确启用/禁用
         function forceUpdateButtonState() {
             const createButton = document.getElementById('createSessionBtn');
             const hasUser = selectedUserId !== null && selectedUserId !== undefined && selectedUserId !== '';
             const hasRoles = selectedRoleIds.length > 0;
-            
+
             createButton.disabled = !(hasUser && hasRoles);
-            
+
             console.log('按钮状态更新:', {
                 hasUser: hasUser,
                 userId: selectedUserId,
@@ -725,26 +721,26 @@
                 buttonDisabled: createButton.disabled
             });
         }
-        
+
         // 渲染会话列表
         function renderSessionList() {
             const sessionList = document.getElementById('sessionList');
             sessionList.innerHTML = '';  // 清空列表
             console.log(`正在渲染${sessions.length}个会话`);
-            
+
             // 检查会话数组是否有效
             if (!Array.isArray(sessions) || sessions.length === 0) {
                 sessionList.innerHTML = '<div class="empty-message">暂无会话数据</div>';
                 return;
             }
-            
+
             // 按创建时间降序排序会话，最新的在最前面
             const sortedSessions = [...sessions].sort((a, b) => {
                 const timeA = a.created_at ? new Date(a.created_at).getTime() : 0;
                 const timeB = b.created_at ? new Date(b.created_at).getTime() : 0;
                 return timeB - timeA;  // 降序排序
             });
-            
+
             sortedSessions.forEach(session => {
                 // 获取会话ID - 兼容不同的ID字段名
                 const sessionId = getSessionId(session);
@@ -752,17 +748,17 @@
                     console.warn('发现没有有效ID的会话:', session);
                     return; // 跳过没有ID的会话
         }
-        
+
                 // 获取用户信息
                 let userName = '未知用户';
                 let userId = 'anonymous_user';
-                
+
                 if (session.user_id) {
                     userId = session.user_id;
                     // 查找用户对象
-                    const userObj = users.find(u => 
-                        u._id === session.user_id || 
-                        u.id === session.user_id || 
+                    const userObj = users.find(u =>
+                        u._id === session.user_id ||
+                        u.id === session.user_id ||
                         u.user_id === session.user_id
                     );
                     if (userObj) {
@@ -772,20 +768,20 @@
                     userName = session.user.name || session.user.username || '未知用户';
                     userId = session.user._id || session.user.id || session.user.user_id || 'anonymous_user';
                 }
-                
+
                 // 使用会话自身的user_name字段（如果有）
                 if (session.user_name) {
                     userName = session.user_name;
                     console.log(`使用会话自身的user_name: ${userName}`);
                 }
-                
+
                 // 格式化创建时间
                 let creationTime = '未知时间';
                 if (session.created_at) {
                     try {
                         const date = new Date(session.created_at);
-                        creationTime = isNaN(date.getTime()) 
-                            ? '未知时间' 
+                        creationTime = isNaN(date.getTime())
+                            ? '未知时间'
                             : date.toLocaleString('zh-CN', {
                                 year: 'numeric',
                                 month: '2-digit',
@@ -797,10 +793,10 @@
                         console.error('日期格式化错误:', e);
                     }
                 }
-                
+
                 // 获取会话标题
                 const sessionTitle = session.title || session.class_name || `未命名会话`;
-                
+
                 // 创建会话项
                 const listItem = document.createElement('div');
                 listItem.className = 'session-item';
@@ -818,7 +814,7 @@
                         <button class="btn btn-sm btn-danger delete-session-btn">删除</button>
                     </div>
                 `;
-                
+
                 // 添加打开会话的事件监听器
                 const openBtn = listItem.querySelector('.open-session-btn');
                 openBtn.addEventListener('click', (e) => {
@@ -832,7 +828,7 @@
                     });
                     openChatSession(sessionId, userName, userId);
                     });
-                    
+
                 // 添加删除会话的事件监听器
                 const deleteBtn = listItem.querySelector('.delete-session-btn');
                 deleteBtn.addEventListener('click', (e) => {
@@ -841,7 +837,7 @@
                         deleteSession(sessionId);
                     }
                 });
-                    
+
                 // 点击整个会话项也可以打开会话
                 listItem.addEventListener('click', () => {
                     // 记录会话数据，便于调试
@@ -853,65 +849,65 @@
                     });
                     openChatSession(sessionId, userName, userId);
             });
-            
+
                 sessionList.appendChild(listItem);
             });
         }
-        
+
         // 辅助函数：获取会话的ID，处理不同的ID字段名
         function getSessionId(session) {
             if (!session) return null;
             // 按优先级依次尝试不同的ID字段名
             return session.session_id || session._id || session.id || null;
         }
-        
+
         // 打开聊天会话
         function openChatSession(sessionId, userName, userId) {
             if (!sessionId) {
                 console.error('无效的会话ID');
                 return;
             }
-            
+
             // 确保userName和userId有值
             userName = userName || '未知用户';
             userId = userId || 'anonymous_user';
-            
+
             console.log(`打开会话: ${sessionId}, 用户: ${userName}, 用户ID: ${userId}`);
-                
+
             // 跳转到两阶段流式聊天页面，使用完整URL，携带会话ID、用户名和用户ID参数
             const url = `http://localhost:8000/two-phase-stream-chat?session_id=${encodeURIComponent(sessionId)}&userName=${encodeURIComponent(userName)}&userId=${encodeURIComponent(userId)}&displayParams=true`;
             console.log(`跳转到URL: ${url}`);
             window.location.href = url;
         }
-        
+
         // 删除会话
         async function deleteSession(sessionId) {
             if (!sessionId) {
                 showToast('错误', '无法删除会话：会话ID无效', 'error');
                 return;
             }
-            
+
             try {
                 // 显示加载指示器
                 showLoading('正在删除会话...');
-                
+
                 const response = await fetch(`/api/custom-sessions/${sessionId}`, {
                     method: 'DELETE',
                     headers: {
                         'Content-Type': 'application/json',
                     }
                 });
-                
+
                 // 隐藏加载指示器
                 hideLoading();
-                
+
                 if (response.ok) {
                     // 从本地会话列表中移除该会话
                     sessions = sessions.filter(session => getSessionId(session) !== sessionId);
-                
+
                     // 重新渲染会话列表
                     renderSessionList();
-                    
+
                     // 显示成功消息
                     showToast('成功', '会话已成功删除', 'success');
                 } else {
@@ -923,7 +919,7 @@
                         showToast('警告', '会话不存在或已被删除', 'warning');
                         return;
                     }
-                    
+
                     // 处理其他错误
                     const errorData = await response.json().catch(() => {});
                     const errorMessage = errorData?.detail || errorData?.message || '删除会话失败，服务器返回错误';
@@ -936,7 +932,7 @@
                 showToast('错误', '删除会话时发生网络错误', 'error');
             }
         }
-        
+
         // 创建确认对话框
         function createConfirmDialog(title, content, onConfirm, onCancel) {
             // 创建对话框外层容器
@@ -954,7 +950,7 @@
                 align-items: center;
                 z-index: 9999;
             `;
-            
+
             // 创建对话框内容
             const modalContent = document.createElement('div');
             modalContent.className = 'modal-content';
@@ -967,7 +963,7 @@
                 max-height: 80%;
                 overflow-y: auto;
             `;
-            
+
             // 创建标题
             const modalTitle = document.createElement('h3');
             modalTitle.textContent = title;
@@ -976,7 +972,7 @@
                 border-bottom: 1px solid #eee;
                 padding-bottom: 10px;
             `;
-            
+
             // 创建内容
             const modalBody = document.createElement('div');
             modalBody.innerHTML = content;
@@ -991,7 +987,7 @@
                 border-radius: 4px;
                 border: 1px solid #e9ecef;
             `;
-            
+
             // 创建按钮区域
             const modalFooter = document.createElement('div');
             modalFooter.style.cssText = `
@@ -1002,7 +998,7 @@
                 border-top: 1px solid #eee;
                 padding-top: 15px;
             `;
-            
+
             // 确认按钮
             const confirmButton = document.createElement('button');
             confirmButton.textContent = '确认';
@@ -1011,7 +1007,7 @@
                 document.body.removeChild(modalOverlay);
                 if (typeof onConfirm === 'function') onConfirm();
             };
-            
+
             // 取消按钮
             const cancelButton = document.createElement('button');
             cancelButton.textContent = '取消';
@@ -1020,7 +1016,7 @@
                 document.body.removeChild(modalOverlay);
                 if (typeof onCancel === 'function') onCancel();
             };
-            
+
             // 组装对话框
             modalFooter.appendChild(cancelButton);
             modalFooter.appendChild(confirmButton);
@@ -1028,7 +1024,7 @@
             modalContent.appendChild(modalBody);
             modalContent.appendChild(modalFooter);
             modalOverlay.appendChild(modalContent);
-            
+
             // 添加到页面
             document.body.appendChild(modalOverlay);
         }
@@ -1036,27 +1032,27 @@
         // 创建会话
         async function createSession() {
             console.log('点击创建会话按钮');
-            
+
             // 手动校验选择是否有效
             if (!selectedUserId) {
                 showMessage('请选择一个用户', 'error');
                 console.error('未选择用户');
                 return;
             }
-            
+
             if (selectedRoleIds.length === 0) {
                 showMessage('请选择至少一个角色', 'error');
                 console.error('未选择角色');
                 return;
             }
-            
+
             // 显示当前状态
             console.log('正在准备创建会话:', {
                 userId: selectedUserId,
                 roleIds: selectedRoleIds,
                 buttonState: document.getElementById('createSessionBtn').disabled
             });
-            
+
             try {
                 // 获取选中的用户信息
                 const selectedUser = users.find(user => user._id === selectedUserId);
@@ -1064,7 +1060,7 @@
                     throw new Error('无法获取所选用户信息');
                 }
                 const userName = selectedUser.name || selectedUser.username || '未命名用户';
-                
+
                 // 获取选中的角色信息并格式化为API需要的格式，包括system_prompt字段
                 const selectedRoles = selectedRoleIds.map(roleId => {
                     const role = roles.find(r => r._id === roleId);
@@ -1075,24 +1071,24 @@
                             role_name: '未知角色'
                         };
                     }
-                    
+
                     // 包含system_prompt字段（如果有）
                     const roleData = {
                         role_id: roleId,
                         role_name: role.name || '未命名角色'
                     };
-                    
+
                     // 检查角色是否有system_prompt字段
                     if (role.system_prompt) {
                         roleData.system_prompt = role.system_prompt;
                     }
-                    
+
                     return roleData;
                 });
-                
+
                 // 添加请求标识符
                 const requestId = `req_${Date.now()}`;
-                
+
                 // 构建符合API要求的请求数据
                 const requestData = {
                     class_id: `class_${Date.now()}`, // 生成唯一的class_id
@@ -1102,10 +1098,10 @@
                     roles: selectedRoles,
                     request_id: requestId // 添加请求标识符，方便在Network中查找
                 };
-                
+
                 // 格式化要展示的参数内容
                 const formattedParams = JSON.stringify(requestData, null, 2);
-                
+
                 // 显示确认对话框
                 createConfirmDialog(
                     '确认创建会话',
@@ -1114,7 +1110,7 @@
                         try {
                             // 用户确认，显示加载中
                             showLoading('正在创建会话...');
-                            
+
                             // 打印更详细的请求信息，帮助在Network面板中识别
                             console.group('创建会话请求详情');
                             console.log('请求URL:', '/api/custom-sessions');
@@ -1122,9 +1118,9 @@
                             console.log('请求ID:', requestId);
                             console.log('请求数据:', JSON.stringify(requestData, null, 2));
                             console.groupEnd();
-                            
+
                             console.log('%c在Network面板中查找请求ID: ' + requestId, 'color: green; font-weight: bold');
-                            
+
                             // 发送创建会话请求
                             console.time('会话创建请求耗时');
                             const response = await fetch('/api/custom-sessions', {
@@ -1136,7 +1132,7 @@
                                 body: JSON.stringify(requestData)
                             });
                             console.timeEnd('会话创建请求耗时');
-                            
+
                             // 获取响应文本，用于调试
                             const responseText = await response.text();
                             console.group('创建会话响应详情');
@@ -1144,7 +1140,7 @@
                             console.log('响应头:', Object.fromEntries([...response.headers]));
                             console.log('响应内容:', responseText);
                             console.groupEnd();
-                            
+
                             // 尝试解析JSON
                             let result;
                             try {
@@ -1153,20 +1149,20 @@
                                 console.error('无法解析JSON响应:', e);
                                 throw new Error(`服务器返回了无效的JSON: ${responseText}`);
                             }
-                            
+
                             if (!response.ok) {
                                 throw new Error(`服务器返回错误 (${response.status}): ${result.detail || result.message || responseText}`);
                             }
-                            
+
                             // 成功创建会话，显示成功消息
                             console.log('会话创建成功:', result);
                             showMessage('会话创建成功！页面将刷新...', 'success');
-                            
+
                             // 延迟1秒后刷新页面
                             setTimeout(() => {
                                 window.location.reload();
                             }, 1000);
-                            
+
                         } catch (error) {
                             hideLoading();
                             console.error('创建会话失败:', error);
@@ -1179,13 +1175,13 @@
                         showMessage('已取消创建会话', 'info');
                     }
                 );
-                
+
             } catch (error) {
                 console.error('准备创建会话数据失败:', error);
                 showMessage(`准备会话数据失败: ${error.message}`, 'error');
             }
         }
-        
+
         // 辅助函数：HTML转义
         function escapeHtml(unsafe) {
             if (typeof unsafe !== 'string') return '';
@@ -1196,7 +1192,7 @@
                 .replace(/"/g, "&quot;")
                 .replace(/'/g, "&#039;");
         }
-        
+
         // 显示提示信息
         function showToast(title, message, type = 'info') {
             const toast = document.createElement('div');
@@ -1208,15 +1204,15 @@
                 </div>
                 <div class="toast-body">${escapeHtml(message)}</div>
             `;
-            
+
             document.body.appendChild(toast);
-                    
+
             // 添加关闭按钮事件
             const closeBtn = toast.querySelector('.close-btn');
             closeBtn.addEventListener('click', () => {
                 toast.remove();
             });
-            
+
             // 3秒后自动消失
             setTimeout(() => {
                 toast.classList.add('fadeout');
@@ -1225,4 +1221,4 @@
         }
     </script>
 </body>
-</html> 
+</html>

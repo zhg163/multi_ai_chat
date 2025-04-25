@@ -35,7 +35,9 @@ class SessionRoleManager:
             # 使用默认Redis DB 0，而不是依赖于配置中的REDIS_DB属性
             redis_db = getattr(settings, "REDIS_DB", 0)
             self.redis_url = f"redis://{settings.REDIS_HOST}:{settings.REDIS_PORT}/{redis_db}"
-        if settings.REDIS_PASSWORD:
+            
+            # 处理密码配置，放在if self.redis is None内部
+            if settings.REDIS_PASSWORD:
                 self.redis_url = f"redis://:{settings.REDIS_PASSWORD}@{settings.REDIS_HOST}:{settings.REDIS_PORT}/{redis_db}"
         
         # 初始化日志记录器

@@ -6,7 +6,8 @@ from pymongo.errors import PyMongoError
 
 from app.models.session import Session, SessionStatus
 from app.models.role import Role
-from app.services.role_service import RoleService
+# Remove top-level import to break circular dependency
+# from app.services.role_service import RoleService
 from ..database.mongodb import get_db
 
 logger = logging.getLogger(__name__)
@@ -38,6 +39,9 @@ class SessionService:
         try:
             # 验证角色是否存在且处于活跃状态
             if role_ids:
+                # Import RoleService here to avoid circular dependency
+                from app.services.role_service import RoleService
+                
                 valid_role_ids = []
                 for role_id in role_ids:
                     role = await RoleService.get_role_by_id(role_id)
@@ -187,6 +191,9 @@ class SessionService:
                 raise ValueError(f"会话ID '{session_id}' 不存在或无权访问")
             
             # 验证角色是否存在且处于活跃状态
+            # Import RoleService here to avoid circular dependency
+            from app.services.role_service import RoleService
+            
             valid_role_ids = []
             for role_id in role_ids:
                 role = await RoleService.get_role_by_id(role_id)
@@ -230,6 +237,9 @@ class SessionService:
             if not role_ids:
                 return []
             
+            # Import RoleService here to avoid circular dependency
+            from app.services.role_service import RoleService
+            
             # 获取角色详细信息
             roles = []
             for role_id in role_ids:
@@ -265,6 +275,9 @@ class SessionService:
             if not session:
                 raise ValueError(f"会话ID '{session_id}' 不存在或无权访问")
             
+            # Import RoleService here to avoid circular dependency
+            from app.services.role_service import RoleService
+            
             # 验证角色是否存在且处于活跃状态
             role = await RoleService.get_role_by_id(role_id)
             if not role or not role.get("active", False):
@@ -296,7 +309,7 @@ class SessionService:
         参数:
             session_id: 会话ID
             user_id: 用户ID
-            role_id: 角色ID
+            role_id: 要移除的角色ID
             
         返回:
             操作是否成功
@@ -307,7 +320,15 @@ class SessionService:
             if not session:
                 raise ValueError(f"会话ID '{session_id}' 不存在或无权访问")
             
-            # 检查角色是否已分配给会话
+            # Import RoleService here to avoid circular dependency
+            from app.services.role_service import RoleService
+            
+            # 验证角色是否存在
+            role = await RoleService.get_role_by_id(role_id)
+            if not role:
+                raise ValueError(f"角色ID '{role_id}' 不存在")
+            
+            # 检查角色是否已经分配给会话
             session_role_ids = session.get("role_ids", [])
             if role_id not in session_role_ids:
                 # 角色不存在，视为成功
@@ -318,7 +339,7 @@ class SessionService:
             
             return success
         except Exception as e:
-            logger.error(f"从会话中移除角色失败: {e}")
+            logger.error(f"从会话移除角色失败: {e}")
             raise
     
     @staticmethod
@@ -691,4 +712,90 @@ class SessionService:
             }
         except Exception as e:
             logger.error(f"搜索会话失败: {e}")
+            raise
+    
+    @staticmethod
+    async def batch_remove_session_roles(
+        session_id: Union[str, ObjectId],
+        user_id: str,
+        role_ids: List[str]
+    ) -> bool:
+        """
+        批量从会话中移除角色
+        
+        参数:
+            session_id: 会话ID
+            user_id: 用户ID
+            role_ids: 要移除的角色ID列表
+            
+        返回:
+            操作是否成功
+        """
+        if not role_ids:
+            return True
+            
+        try:
+            # 检查会话是否存在
+            session = await Session.get_by_id(session_id, user_id)
+            if not session:
+                raise ValueError(f"会话ID '{session_id}' 不存在或无权访问")
+            
+            # Import RoleService here to avoid circular dependency
+            from app.services.role_service import RoleService
+            
+            # 验证所有角色是否存在
+            for role_id in role_ids:
+                role = await RoleService.get_role_by_id(role_id)
+                if not role:
+                    raise ValueError(f"角色ID '{role_id}' 不存在")
+            
+            # 移除角色
+            success = await session.remove_roles(role_ids)
+            
+            return success
+        except Exception as e:
+            logger.error(f"批量从会话移除角色失败: {e}")
+            raise
+    
+    @staticmethod
+    async def list_session_roles(
+        session_id: Union[str, ObjectId],
+        user_id: str
+    ) -> List[dict]:
+        """
+        获取会话关联的所有角色
+        
+        参数:
+            session_id: 会话ID
+            user_id: 用户ID
+            
+        返回:
+            角色列表，每个角色包含角色的详细信息
+        """
+        try:
+            # 检查会话是否存在
+            session = await Session.get_by_id(session_id, user_id)
+            if not session:
+                raise ValueError(f"会话ID '{session_id}' 不存在或无权访问")
+            
+            # Import RoleService here to avoid circular dependency
+            from app.services.role_service import RoleService
+            
+            # 获取会话中的角色ID
+            role_ids = session.role_ids if hasattr(session, 'role_ids') else []
+            
+            # 如果没有角色，返回空列表
+            if not role_ids:
+                return []
+            
+            # 获取角色详细信息
+            roles = []
+            for role_id in role_ids:
+                role = await RoleService.get_role_by_id(role_id)
+                if role:
+                    roles.append(role.dict())
+            
+            return roles
+        except Exception as e:
+            logger.error(f"获取会话角色失败: {e}")
             raise 

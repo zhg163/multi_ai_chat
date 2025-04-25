@@ -114,7 +114,11 @@ async def get_all_sessions(
                 for date_field in ['created_at', 'updated_at']:
                     if date_field in session and session[date_field] is not None:
                         try:
-                            session_data[date_field] = session[date_field].isoformat()
+                            # 检查字段是否已经是字符串类型
+                            if isinstance(session[date_field], str):
+                                session_data[date_field] = session[date_field]
+                            else:
+                                session_data[date_field] = session[date_field].isoformat()
                         except AttributeError as e:
                             logger.error(f"日期字段{date_field}格式错误: {e}, 值: {session[date_field]}, 类型: {type(session[date_field])}")
                             session_data[date_field] = str(session[date_field])

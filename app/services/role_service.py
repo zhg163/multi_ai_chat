@@ -199,7 +199,9 @@ class RoleService:
         message: str, 
         limit: int = 3, 
         min_score: float = 0.1,
-        active_only: bool = True
+        active_only: bool = True,
+        session_id: Optional[str] = None,
+        user_id: Optional[str] = None
     ) -> List[Dict[str, Any]]:
         """
         根据用户消息中的关键词匹配最合适的角色
@@ -209,12 +211,24 @@ class RoleService:
             limit: 最多返回的角色数量
             min_score: 最小匹配分数，低于此分数的匹配将被忽略
             active_only: 是否只匹配活跃角色
+            session_id: 会话ID，如果提供则从会话中获取角色
+            user_id: 用户ID，如果提供则从会话中获取角色
             
         返回:
             按匹配度排序的角色列表，每个角色包含匹配分数
         """
-        # 获取所有活跃角色
-        roles = await RoleService.list_roles(active_only=active_only)
+        # Import SessionService here to avoid circular dependency
+        from app.services.session_service import SessionService
+        
+        # 获取角色列表
+        roles = []
+        if session_id and user_id:
+            # 从会话中获取角色
+            roles = await SessionService.get_session_roles(session_id, user_id)
+        else:
+            # 使用原有方式获取所有角色
+            roles = await RoleService.list_roles(active_only=active_only)
+        
         if not roles:
             return []
             
@@ -300,12 +314,14 @@ class RoleService:
         return (match_ratio * 0.5) + (keyword_score * 0.5)
     
     @staticmethod
-    async def get_role_for_message(message: str) -> Optional[Dict[str, Any]]:
+    async def get_role_for_message(message: str, session_id: Optional[str] = None, user_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
         """
         为给定消息获取最匹配的角色
         
         参数:
             message: 用户消息
+            session_id: 会话ID（可选）
+            user_id: 用户ID（可选）
             
         返回:
             匹配度最高的角色，如果没有合适匹配则返回None
@@ -313,7 +329,9 @@ class RoleService:
         matched_roles = await RoleService.match_roles_by_keywords(
             message, 
             limit=1, 
-            min_score=0.2  # 设置一个最小阈值，避免不相关匹配
+            min_score=0.2,  # 设置一个最小阈值，避免不相关匹配
+            session_id=session_id,
+            user_id=user_id
         )
         
         if matched_roles:
@@ -321,19 +339,20 @@ class RoleService:
         return None
         
     @staticmethod
-    async def match_role_for_message(message: str, session_id: Optional[str] = None) -> Dict[str, Any]:
+    async def match_role_for_message(message: str, session_id: Optional[str] = None, user_id: Optional[str] = None) -> Dict[str, Any]:
         """
-        匹配最适合的角色并返回结果
-
-        Args:
+        为消息匹配最合适的角色，包含详细的匹配信息
+        
+        参数:
             message: 用户消息
-            session_id: 可选的会话ID
-
-        Returns:
-            Dict: 匹配结果，包含成功状态、角色信息、匹配原因和错误信息
+            session_id: 会话ID（可选）
+            user_id: 用户ID（可选）
+            
+        返回:
+            匹配结果，包含成功标志、角色信息、匹配原因等
         """
+        request_id = str(uuid.uuid4())[:8]
         start_time = time.time()
-        request_id = str(uuid.uuid4())
         logger.info(f"[{request_id}] 开始角色匹配, 消息长度: {len(message)}, 会话ID: {session_id}")
         
         try:
@@ -362,7 +381,12 @@ class RoleService:
             # 根据关键词匹配角色
             match_start = time.time()
             logger.debug(f"[{request_id}] 开始根据关键词匹配角色")
-            matched_roles = await RoleService.match_roles_by_keywords(keywords, top_k=3)
+            matched_roles = await RoleService.match_roles_by_keywords(
+                keywords, 
+                limit=3,
+                session_id=session_id,
+                user_id=user_id
+            )
             match_time = time.time() - match_start
             logger.debug(f"[{request_id}] 角色匹配完成，耗时: {match_time:.4f}秒, 匹配到 {len(matched_roles)} 个角色")
             

@@ -53,6 +53,9 @@ class RAGEnhancedService:
         self.session_service = session_service or SessionService()
         self.role_service = role_service or RoleService()
         
+        # 新增：初始化session_role_manager (将在initialize方法中创建)
+        self.session_role_manager = None
+        
         # 获取检索API密钥并确保正确格式
         retrieval_key = settings.RETRIEVAL_API_KEY
         if retrieval_key and not retrieval_key.startswith("skragflow-"):
@@ -109,6 +112,11 @@ class RAGEnhancedService:
         # 验证API密钥
         self._validate_api_keys()
             
+        # 初始化SessionRoleManager
+        from app.services.session_role_manager import SessionRoleManager
+        self.session_role_manager = SessionRoleManager(redis_client=self.redis)
+        logger.info("Session role manager initialized successfully")
+        
         self._initialized = True
         self.logger.info("RAGEnhancedService initialized successfully")
         
@@ -777,7 +785,7 @@ Answer:"""
                                             continue
                                     
                         # 将历史消息添加到完整消息列表中
-                                    logger.info(f"成功解析 {len(history)} 条有效历史消息")
+                                logger.info(f"成功解析 {len(history)} 条有效历史消息")
                                 for msg in history:
                                     complete_messages.append({
                                         "role": msg.get("role", "user"),
@@ -1261,6 +1269,53 @@ Answer:"""
             init_time = time.time() - init_start
             logger.debug(f"[{request_id}] 服务初始化检查完成，耗时: {init_time:.4f}秒")
             
+            # 新增逻辑：如果提供了session_id，先检查该会话是否只有一个角色
+            if session_id and self.session_role_manager:
+                session_roles_start = time.time()
+                try:
+                    # 从会话中获取角色列表 - 使用SessionRoleManager而不是SessionService
+                    session_roles = await self.session_role_manager.get_session_roles(session_id)
+                    session_roles_time = time.time() - session_roles_start
+                    logger.debug(f"[{request_id}] 获取会话角色列表完成，耗时: {session_roles_time:.4f}秒，找到 {len(session_roles)} 个角色")
+                    
+                    # 如果会话中只有一个角色，直接返回该角色作为匹配结果
+                    if len(session_roles) == 1:
+                        role = session_roles[0]
+                        logger.info(f"[{request_id}] 会话只有一个角色，直接使用: {role.get('role_name', '未知角色')}")
+                        
+                        # 构建返回结果
+                        match_result = {
+                            "success": True,
+                            "role": role,
+                            "match_reason": "会话中只有一个可用角色，直接使用",
+                            "matched_keywords": []
+                        }
+                        
+                        # 如果会话ID存在，保存匹配角色到Redis
+                        if session_id and (role.get("role_id") or role.get("id") or role.get("_id")):
+                            redis_start = time.time()
+                            try:
+                                role_id = role.get("role_id") or role.get("id") or str(role.get("_id"))
+                                await asyncio.wait_for(
+                                    self.redis.hset(f"chatrag:session:{session_id}:info", "matched_role_id", role_id),
+                                    timeout=2.0
+                                )
+                                await asyncio.wait_for(
+                                    self.redis.expire(f"chatrag:session:{session_id}:info", 86400),  # 1天过期
+                                    timeout=1.0
+                                )
+                                redis_time = time.time() - redis_start
+                                logger.debug(f"[{request_id}] 保存匹配角色到Redis完成，耗时: {redis_time:.4f}秒")
+                            except Exception as e:
+                                logger.warning(f"[{request_id}] 保存匹配角色到Redis失败: {str(e)}")
+                        
+                        total_time = time.time() - start_time
+                        logger.info(f"[{request_id}] 角色匹配完成（单一角色直接使用），总耗时: {total_time:.4f}秒")
+                        return match_result
+                except Exception as e:
+                    logger.warning(f"[{request_id}] 获取会话角色时出错，将继续常规匹配: {str(e)}")
+                    # 继续执行正常的匹配流程
+            
             # 获取用户最后一条消息内容
             msg_process_start = time.time()
             if not messages or len(messages) == 0:
@@ -1352,7 +1407,8 @@ Answer:"""
     
     async def generate_response(self, messages: List[dict], model: str = "deepseek-chat", 
                             session_id: str = None, user_id: str = None, role_id: str = None,
-                            stream: bool = True, provider: str = None, model_name: str = None, 
+                            role_info: Dict[str, Any] = None, stream: bool = True, 
+                            provider: str = None, model_name: str = None, 
                             api_key: str = None) -> AsyncGenerator:
         """
         第二阶段：基于已选择的角色生成回复
@@ -1365,6 +1421,7 @@ Answer:"""
             session_id: 会话ID
             user_id: 用户ID
             role_id: 角色ID
+            role_info: 角色完整信息（如果提供则不再查询数据库）
             stream: 是否启用流式输出 
             provider: LLM提供商
             model_name: 模型名称（优先级高于model）
@@ -1396,7 +1453,11 @@ Answer:"""
             logger.info(f"快速规则触发: 问题过短，无需RAG分析, 跳过RAG分析")
         
         # 重要：使用服务中现有的内部方法构建完整上下文
-        prepared_messages = await self._prepare_messages(messages, role_id)
+        # 如果提供了role_info，就不需要再查询角色信息
+        if role_id and not role_info:
+            role_info = await self.get_role_info(role_id)
+        
+        prepared_messages = await self._prepare_messages_with_role_info(messages, role_id, role_info)
         
         # 如果需要RAG，执行知识检索流程
         if need_rag:
@@ -1423,14 +1484,43 @@ Answer:"""
             model_to_use = model_name or model
             logger.info(f"调用LLM生成回复，提供商: {provider or '默认'}, 模型: {model_to_use}")
             
-            async for content in self.llm_service.generate_text(
-                messages=prepared_messages,
-                model=model_to_use,
-                stream=stream,
-                provider=provider,
-                api_key=api_key
-            ):
-                yield content
+            # 确保provider不为None
+            effective_provider = provider
+            if effective_provider is None:
+                effective_provider = self.llm_service.default_config.provider.value if hasattr(self.llm_service.default_config.provider, 'value') else 'deepseek'
+                logger.debug(f"使用默认提供商: {effective_provider}")
+            
+            if stream:
+                # 使用流式生成API
+                async for content in self.llm_service.generate_stream(
+                    messages=prepared_messages,
+                    config={
+                        "model": model_to_use,
+                        "provider": effective_provider,
+                        "api_key": api_key
+                    }
+                ):
+                    if isinstance(content, dict) and "content" in content:
+                        yield content["content"]
+                    elif hasattr(content, "content"):
+                        yield content.content
+                    else:
+                        yield content
+            else:
+                # 使用非流式生成API
+                response = await self.llm_service.generate_response(
+                    messages=prepared_messages,
+                    config={
+                        "model": model_to_use,
+                        "provider": effective_provider,
+                        "api_key": api_key
+                    }
+                )
+                # 返回整个响应内容
+                if hasattr(response, "content"):
+                    yield response.content
+                else:
+                    yield response
                 
             # 处理消息存储
             if session_id:
@@ -1545,31 +1635,34 @@ Answer:"""
         
         return new_messages
     
-    async def _prepare_messages(self, messages: List[dict], role_id: str) -> List[dict]:
+    async def _prepare_messages_with_role_info(self, messages: List[dict], role_id: str, role_info: Dict[str, Any] = None) -> List[dict]:
         """
-        Prepare messages for the LLM
+        使用预先获取的角色信息准备消息列表
         
         Args:
-            messages: List of messages
-            role_id: Used role ID
+            messages: 消息列表
+            role_id: 角色ID
+            role_info: 预先获取的角色信息（如果为None则会查询数据库）
             
         Returns:
-            Updated list of messages
+            更新后的消息列表
         """
-        # Ensure the service is initialized
+        # 确保服务已初始化
         await self._ensure_initialized()
         
-        # 获取角色信息
-        role_info = await self.get_role_info(role_id)
+        # 如果没有提供角色信息且有角色ID，获取角色信息
+        if not role_info and role_id:
+            role_info = await self.get_role_info(role_id)
+            
         if not role_info:
-            logger.warning(f"未找到角色: {role_id}")
+            logger.warning(f"未找到角色信息，使用原始消息: {role_id}")
             return messages
         
         # 构建完整的消息列表
         complete_messages = []
         
         # 添加系统消息
-        complete_messages.append({"role": "system", "content": role_info["system_prompt"]})
+        complete_messages.append({"role": "system", "content": role_info.get("system_prompt", "你是一个助手，请根据用户的问题提供有用的回答。")})
         
         # 获取历史消息（如果有会话ID和用户ID）
         if role_id:
@@ -1600,7 +1693,7 @@ Answer:"""
                             # 检查消息键是否存在
                             key_exists = await redis_client.exists(redis_key)
                             logger.info(f"Redis消息键 {redis_key} 存在: {key_exists}")
-                
+                    
                             if key_exists:
                                 # 获取消息记录
                                 messages_data = await redis_client.lrange(redis_key, 0, -1)
@@ -1617,14 +1710,14 @@ Answer:"""
                                     except json.JSONDecodeError:
                                         logger.warning(f"解析消息失败: {msg_data[:100]}")
                                         continue
-                                    
-                        # 将历史消息添加到完整消息列表中
+                                
+                                # 将历史消息添加到完整消息列表中
                                 logger.info(f"成功解析 {len(history)} 条有效历史消息")
-                            for msg in history:
-                                complete_messages.append({
-                                    "role": msg.get("role", "user"),
-                                    "content": msg.get("content", "")
-                                })
+                                for msg in history:
+                                    complete_messages.append({
+                                        "role": msg.get("role", "user"),
+                                        "content": msg.get("content", "")
+                                    })
                             else:
                                 logger.warning(f"Redis中不存在消息键 {redis_key}")
                         else:
@@ -1642,4 +1735,18 @@ Answer:"""
                 "content": msg.get("content", "")
             })
         
-        return complete_messages 
+        return complete_messages
+
+    async def _prepare_messages(self, messages: List[dict], role_id: str) -> List[dict]:
+        """
+        Prepare messages for the LLM
+        
+        Args:
+            messages: List of messages
+            role_id: Used role ID
+            
+        Returns:
+            Updated list of messages
+        """
+        # 为保持兼容性，调用新的实现
+        return await self._prepare_messages_with_role_info(messages, role_id, None) 

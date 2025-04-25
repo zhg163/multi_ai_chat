@@ -53,7 +53,8 @@ async def generate_response_get(
     enable_rag: bool = Query(True, description="是否启用RAG增强"),
     auto_role_match: bool = Query(True, description="是否启用自动角色匹配"),
     role_id: Optional[str] = Query(None, description="指定角色ID"),
-    stream: bool = Query(False, description="是否使用流式响应")
+    stream: bool = Query(False, description="是否使用流式响应"),
+    show_thinking: bool = Query(True, description="是否显示思考过程")
 ):
     """
     第一阶段API（GET方法）：基于用户消息生成响应
@@ -66,6 +67,7 @@ async def generate_response_get(
         auto_role_match: 是否启用自动角色匹配（可选，默认为True）
         role_id: 指定角色ID（可选）
         stream: 是否使用流式响应（可选，默认为False）
+        show_thinking: 是否显示思考过程（可选，默认为True）
     
     返回:
         如果stream=False:
@@ -75,6 +77,7 @@ async def generate_response_get(
             match_score: 匹配分数
             match_reason: 匹配原因
             references: 如果启用RAG，返回的相关参考资料
+            thinking_process: 如果show_thinking=True，返回思考过程
         如果stream=True:
             返回SSE格式的数据流
     """
@@ -87,7 +90,8 @@ async def generate_response_get(
                 user_id=user_id,
                 enable_rag=enable_rag,
                 auto_role_match=auto_role_match,
-                role_id=role_id
+                role_id=role_id,
+                show_thinking=show_thinking
             ),
             media_type="text/event-stream"
         )
@@ -98,7 +102,8 @@ async def generate_response_get(
         "message": message,
         "user_id": user_id,
         "enable_rag": enable_rag,
-        "auto_role_match": auto_role_match
+        "auto_role_match": auto_role_match,
+        "show_thinking": show_thinking
     }
     
     # 如果提供了role_id，添加到数据中
@@ -111,7 +116,8 @@ async def generate_response_get(
 @router.post("/generate", response_model=Dict[str, Any])
 async def generate_response(
     data: Dict[str, Any] = Body(...),
-    stream: bool = Query(False, description="是否使用流式响应")
+    stream: bool = Query(False, description="是否使用流式响应"),
+    show_thinking: bool = Query(True, description="是否显示思考过程")
 ):
     """
     第一阶段API：基于用户消息生成响应
@@ -122,6 +128,7 @@ async def generate_response(
         user_id: 用户ID（可选）
         enable_rag: 是否启用RAG增强（可选，默认为True）
         auto_role_match: 是否启用自动角色匹配（可选，默认为True）
+        show_thinking: 是否显示思考过程（可选，默认为True）
         stream: 是否使用流式响应（查询参数，默认为False）
     
     返回:
@@ -132,9 +139,15 @@ async def generate_response(
             match_score: 匹配分数
             match_reason: 匹配原因
             references: 如果启用RAG，返回的相关参考资料
+            thinking_process: 如果show_thinking=True，返回思考过程
         如果stream=True:
             返回SSE格式的数据流
     """
+    # 从查询参数或请求体获取show_thinking
+    show_thinking_value = show_thinking
+    if "show_thinking" in data:
+        show_thinking_value = data.get("show_thinking")
+    
     # 如果请求流式响应
     if stream:
         return StreamingResponse(
@@ -144,7 +157,8 @@ async def generate_response(
                 user_id=data.get("user_id", "anonymous"),
                 enable_rag=data.get("enable_rag", True),
                 auto_role_match=data.get("auto_role_match", True),
-                role_id=data.get("role_id")
+                role_id=data.get("role_id"),
+                show_thinking=show_thinking_value
             ),
             media_type="text/event-stream"
         )
@@ -160,37 +174,33 @@ async def generate_response(
         raise HTTPException(status_code=400, detail="缺少必须的参数")
     
     try:
-        # 1. 生成唯一消息ID
-        message_id = str(uuid.uuid4())
-        timestamp = datetime.utcnow().isoformat()
-        
-        # 2. 获取Redis客户端
-        redis_client = await get_redis_client()
-        
-        # 3. 获取记忆管理器
+        # 1. 获取RAG服务和内存管理器
+        rag_service = await get_initialized_rag_service()
         memory_manager = await get_memory_manager()
         
-        # 4. 将用户消息添加到短期记忆
-        await memory_manager.add_message(
-            session_id=session_id,
-            user_id=user_id,
-            role="user",
-            content=message,
-            message_id=f"user-{message_id}"
-        )
-        
-        # 5. 获取会话锁，防止并发处理
+        # 2. 获取会话锁，防止并发处理同一会话
+        redis_client = await get_redis_client()
         lock_name = f"two_phase:lock:{session_id}"
         lock = await obtain_lock(redis_client, lock_name, expire_seconds=60)
         
         if lock is None:
-            raise HTTPException(
-                status_code=409, 
-                detail="会话正忙，请稍后再试"
-            )
+            raise HTTPException(status_code=429, detail="会话正忙，请稍后再试")
         
         try:
-            # 6. 存储请求信息到Redis
+            # 3. 生成唯一消息ID
+            message_id = str(uuid.uuid4())
+            timestamp = datetime.utcnow().isoformat()
+            
+            # 4. 将用户消息添加到短期记忆
+            await memory_manager.add_message(
+                session_id=session_id,
+                user_id=user_id,
+                role="user",
+                content=message,
+                message_id=f"user-{message_id}"
+            )
+            
+            # 5. 存储请求信息到Redis
             request_key = f"two_phase:request:{message_id}"
             
             await redis_client.hset(request_key, mapping={
@@ -199,65 +209,71 @@ async def generate_response(
                 "message": message,
                 "status": "pending",
                 "created_at": timestamp,
-                "enable_rag": str(enable_rag),
-                "auto_role_match": str(auto_role_match)
+                "enable_rag": str(enable_rag)
             })
             await redis_client.expire(request_key, 3600)  # 1小时过期
             
-            # 7. 获取会话信息
+            # 6. 获取会话信息和会话绑定的角色
             session = await CustomSessionService.get_session(session_id)
             
             if not session or "roles" not in session:
+                logger.error(f"未找到会话或会话中没有角色: {session_id}")
                 raise HTTPException(status_code=404, detail="未找到会话或会话中没有角色")
             
-            # 获取会话中的角色列表
             available_roles = session.get("roles", [])
             if not available_roles:
-                raise HTTPException(status_code=400, detail="会话中没有可用角色")
+                logger.error(f"会话中没有可用角色: {session_id}")
+                raise HTTPException(status_code=404, detail="会话中没有可用角色")
             
-            # 8. 获取RAG服务并准备消息
-            rag_service = await get_initialized_rag_service()
+            # 7. 准备消息
             messages = [{"role": "user", "content": message}]
             
-            # 9. 角色匹配
-            match_result = None
-            role_info = None  # 用于存储角色完整信息
+            # 8. 根据参数决定是否进行角色匹配
+            role_info = None
             match_score = 0.0
             match_reason = ""
             
             try:
-                if auto_role_match:
-                    match_result = await rag_service.match_role_for_chat(
-                        messages=messages,
-                        session_id=session_id,
-                        user_id=user_id
-                    )
+                # 如果有指定角色ID，直接使用
+                if not auto_role_match and role_id:
+                    logger.info(f"使用指定角色ID: {role_id}")
+                else:
+                    # 从可用角色中获取第一个作为备用
+                    fallback_role = available_roles[0]
+                    fallback_role_id = fallback_role.get("role_id") or fallback_role.get("id") or str(fallback_role.get("_id"))
                     
-                    # 从匹配结果中提取角色信息
-                    if match_result and match_result.get("success"):
-                        # 直接使用返回的完整角色对象，而不仅提取ID
-                        matched_role = match_result.get("role", {})
+                    if auto_role_match:
+                        match_result = await rag_service.match_role_for_chat(
+                            messages=messages,
+                            session_id=session_id,
+                            user_id=user_id
+                        )
                         
-                        if matched_role:
-                            # 直接使用完整的角色对象
-                            role_info = matched_role
-                            role_id = matched_role.get("id") or matched_role.get("role_id") or matched_role.get("_id")
-                            match_score = match_result.get("match_score", 0.0)
-                            match_reason = match_result.get("match_reason", "")
+                        # 从匹配结果中提取角色信息
+                        if match_result and match_result.get("success"):
+                            # 直接使用返回的完整角色对象，而不仅提取ID
+                            matched_role = match_result.get("role", {})
                             
-                            role_name = matched_role.get("name") or matched_role.get("role_name", "未知角色")
-                            logger.info(f"自动匹配到角色: {role_id}, 角色名: {role_name}")
+                            if matched_role:
+                                # 直接使用完整的角色对象
+                                role_info = matched_role
+                                role_id = matched_role.get("id") or matched_role.get("role_id") or matched_role.get("_id")
+                                match_score = match_result.get("match_score", 0.0)
+                                match_reason = match_result.get("match_reason", "")
+                                
+                                role_name = matched_role.get("name") or matched_role.get("role_name", "未知角色")
+                                logger.info(f"自动匹配到角色: {role_id}, 角色名: {role_name}")
             except Exception as e:
                 logger.warning(f"角色匹配过程出错: {str(e)}，将使用默认角色")
             
-            # 10. 如果没有匹配到角色，使用第一个可用角色
+            # 9. 如果没有匹配到角色，使用第一个可用角色
             if not role_id:
                 first_role = available_roles[0]
                 role_id = first_role.get("role_id") or first_role.get("id") or first_role.get("_id")
                 role_info = first_role  # 直接使用available_roles中的完整角色对象
                 logger.info(f"使用默认角色: {role_id}")
             
-            # 11. 如果上面的步骤没有获取到完整角色信息，则在available_roles中查找
+            # 10. 如果上面的步骤没有获取到完整角色信息，则在available_roles中查找
             if not role_info:
                 for role in available_roles:
                     role_id_in_list = role.get("role_id") or role.get("id") or str(role.get("_id"))
@@ -275,7 +291,7 @@ async def generate_response(
                         logger.warning(f"未找到角色: {role_id}，尝试使用替代角色")
                         if available_roles:
                             alternative_role = available_roles[0]
-                            alternative_role_id = alternative_role.get("role_id") or alternative_role.get("id") or alternative_role.get("_id")
+                            alternative_role_id = alternative_role.get("role_id") or alternative_role.get("id") or str(alternative_role.get("_id"))
                             if alternative_role_id != role_id:  # 确保不是同一个角色
                                 role_id = alternative_role_id
                                 role_info = await rag_service.get_role_info(role_id)
@@ -304,7 +320,7 @@ async def generate_response(
                         "system_prompt": "你是一个助手，请根据用户的问题提供有用的回答。"
                     }
             
-            # 12. 生成响应
+            # 11. 生成响应
             full_response = ""
             references = []
             
@@ -327,7 +343,7 @@ async def generate_response(
                 # 提供一个默认响应
                 full_response = f"非常抱歉，我在处理您的请求时遇到了问题。错误信息: {str(e)[:100]}..."
             
-            # 13. 将响应添加到短期记忆
+            # 12. 将响应添加到短期记忆
             await memory_manager.add_message(
                 session_id=session_id,
                 user_id=user_id,
@@ -337,7 +353,7 @@ async def generate_response(
                 message_id=f"assistant-{message_id}"
             )
             
-            # 14. 存储完整响应到Redis
+            # 13. 存储完整响应到Redis
             match_score_str = str(match_score)
             match_reason_str = match_reason
             
@@ -351,19 +367,20 @@ async def generate_response(
                 "completed_at": datetime.utcnow().isoformat()
             })
             
-            # 15. 添加到会话历史
+            # 14. 添加到会话历史
             history_key = f"two_phase:history:{session_id}"
             await redis_client.rpush(history_key, message_id)
             await redis_client.expire(history_key, 86400 * 7)  # 7天过期
             
-            # 16. 返回响应
+            # 15. 返回响应
             return {
                 "message_id": message_id,
                 "response": full_response,
                 "selected_role": role_info.get("name") or role_info.get("role_name", "Unknown"),
                 "match_score": match_score,
                 "match_reason": match_reason,
-                "references": references if enable_rag and references else []
+                "references": references if enable_rag and references else [],
+                "thinking_process": show_thinking_value and bool(full_response)
             }
         finally:
             # 释放锁
@@ -651,7 +668,8 @@ async def streaming_response_generator(
     user_id: str,
     enable_rag: bool,
     auto_role_match: bool,
-    role_id: Optional[str]
+    role_id: Optional[str],
+    show_thinking: bool = True  # 新增参数控制是否显示思考过程
 ) -> AsyncGenerator[str, None]:
     """生成流式响应
     
@@ -664,6 +682,7 @@ async def streaming_response_generator(
         enable_rag: 是否启用RAG
         auto_role_match: 是否自动匹配角色
         role_id: 指定角色ID（可选）
+        show_thinking: 是否显示思考过程（可选，默认为True）
         
     Yields:
         SSE格式的数据流
@@ -709,11 +728,12 @@ async def streaming_response_generator(
                 "status": "pending",
                 "created_at": timestamp,
                 "enable_rag": str(enable_rag),
-                "auto_role_match": str(auto_role_match)
+                "auto_role_match": str(auto_role_match),
+                "show_thinking": str(show_thinking)
             })
             await redis_client.expire(request_key, 3600)  # 1小时过期
             
-            # 6. 获取会话信息
+            # 6. 获取会话信息和会话绑定的角色
             session = await CustomSessionService.get_session(session_id)
             
             if not session or "roles" not in session:
@@ -745,26 +765,35 @@ async def streaming_response_generator(
             match_reason = ""
             
             try:
-                if auto_role_match:
-                    match_result = await rag_service.match_role_for_chat(
-                        messages=messages,
-                        session_id=session_id,
-                        user_id=user_id
-                    )
+                # 如果有指定角色ID，直接使用
+                if not auto_role_match and role_id:
+                    logger.info(f"使用指定角色ID: {role_id}")
+                else:
+                    # 从可用角色中获取第一个作为备用
+                    fallback_role = available_roles[0]
+                    fallback_role_id = fallback_role.get("role_id") or fallback_role.get("id") or str(fallback_role.get("_id"))
                     
-                    # 从匹配结果中提取角色信息
-                    if match_result and match_result.get("success"):
-                        matched_role = match_result.get("role", {})
+                    if auto_role_match:
+                        match_result = await rag_service.match_role_for_chat(
+                            messages=messages,
+                            session_id=session_id,
+                            user_id=user_id
+                        )
                         
-                        if matched_role:
-                            # 直接使用完整的角色对象
-                            role_info = matched_role
-                            role_id = matched_role.get("id") or matched_role.get("role_id") or matched_role.get("_id")
-                            match_score = match_result.get("match_score", 0.0)
-                            match_reason = match_result.get("match_reason", "")
+                        # 从匹配结果中提取角色信息
+                        if match_result and match_result.get("success"):
+                            # 直接使用返回的完整角色对象，而不仅提取ID
+                            matched_role = match_result.get("role", {})
                             
-                            role_name = matched_role.get("name") or matched_role.get("role_name", "未知角色")
-                            logger.info(f"自动匹配到角色: {role_id}, 角色名: {role_name}")
+                            if matched_role:
+                                # 直接使用完整的角色对象
+                                role_info = matched_role
+                                role_id = matched_role.get("id") or matched_role.get("role_id") or matched_role.get("_id")
+                                match_score = match_result.get("match_score", 0.0)
+                                match_reason = match_result.get("match_reason", "")
+                                
+                                role_name = matched_role.get("name") or matched_role.get("role_name", "未知角色")
+                                logger.info(f"自动匹配到角色: {role_id}, 角色名: {role_name}")
             except Exception as e:
                 logger.warning(f"角色匹配过程出错: {str(e)}，将使用默认角色")
             
@@ -793,7 +822,7 @@ async def streaming_response_generator(
                         logger.warning(f"未找到角色: {role_id}，尝试使用替代角色")
                         if available_roles:
                             alternative_role = available_roles[0]
-                            alternative_role_id = alternative_role.get("role_id") or alternative_role.get("id") or alternative_role.get("_id")
+                            alternative_role_id = alternative_role.get("role_id") or alternative_role.get("id") or str(alternative_role.get("_id"))
                             if alternative_role_id != role_id:  # 确保不是同一个角色
                                 role_id = alternative_role_id
                                 role_info = await rag_service.get_role_info(role_id)
@@ -834,46 +863,81 @@ async def streaming_response_generator(
             }
             yield f"data: {json.dumps(initial_data)}\n\n"
             
-            # 12. 生成响应（流式）
-            response_buffer = ""
-            references = []
+            # 12. 设置缓冲区
+            response_buffer = ""  # 存储最终响应内容
+            thinking_buffer = ""  # 存储思考过程内容
+            references = []       # 存储参考文档
             
+            # 13. 生成响应（流式）
             try:
-                async for chunk in rag_service.generate_response(
+                async for chunk in rag_service.process_chat(
                     messages=messages,
                     model="default",
                     session_id=session_id,
                     user_id=user_id,
                     role_id=role_id,
-                    role_info=role_info,
-                    stream=True  # 确保使用流式模式
+                    enable_rag=enable_rag,
+                    stream=True,
+                    show_thinking=show_thinking  # 传递show_thinking参数
                 ):
-                    if isinstance(chunk, dict) and "references" in chunk:
-                        references = chunk.get("references", [])
-                        # 发送引用信息
-                        ref_data = {
-                            "type": "references",
-                            "references": references
-                        }
-                        yield f"data: {json.dumps(ref_data)}\n\n"
+                    if isinstance(chunk, dict):
+                        # 处理不同类型的事件
+                        chunk_type = chunk.get("type", "")
+                        
+                        # 思考过程相关事件
+                        if chunk_type in ["thinking_mode", "thinking_start", "thinking_content", 
+                                         "thinking_reference", "thinking_end", "thinking_error"]:
+                            # 直接传递思考过程事件
+                            yield f"data: {json.dumps(chunk)}\n\n"
+                            
+                            # 记录思考内容到缓冲区
+                            if chunk_type == "thinking_content" and "content" in chunk:
+                                thinking_buffer += chunk["content"] + "\n"
+                                # 定期更新Redis中的思考过程记录
+                                if len(thinking_buffer) % 500 == 0:
+                                    await redis_client.hset(
+                                        request_key,
+                                        "thinking_process", 
+                                        thinking_buffer
+                                    )
+                            
+                            # 记录参考文档
+                            if chunk_type == "thinking_reference":
+                                references.append({
+                                    "title": chunk.get("title", ""),
+                                    "content": chunk.get("content", ""),
+                                    "relevance": chunk.get("relevance", 0)
+                                })
+                        
+                        # 内容片段事件
+                        elif chunk_type == "content":
+                            content = chunk.get("content", "")
+                            content_data = {"type": "content", "content": content}
+                            yield f"data: {json.dumps(content_data)}\n\n"
+                            response_buffer += content
+                            
+                            # 定期更新Redis中的响应记录
+                            if len(response_buffer) % 100 == 0:
+                                await redis_client.hset(
+                                    request_key,
+                                    "partial_response", 
+                                    response_buffer
+                                )
+                                
+                        # 引用事件
+                        elif chunk_type == "references":
+                            references = chunk.get("references", [])
+                            yield f"data: {json.dumps(chunk)}\n\n"
+                            
+                        # 其他类型事件直接传递
+                        else:
+                            yield f"data: {json.dumps(chunk)}\n\n"
+                    
                     elif isinstance(chunk, str):
-                        # 将响应片段添加到缓冲区
+                        # 向后兼容：字符串类型直接作为内容发送
+                        content_data = {"type": "content", "content": chunk}
+                        yield f"data: {json.dumps(content_data)}\n\n"
                         response_buffer += chunk
-                        
-                        # 发送响应片段
-                        chunk_data = {
-                            "type": "content",
-                            "content": chunk
-                        }
-                        yield f"data: {json.dumps(chunk_data)}\n\n"
-                        
-                        # 每积累一定长度就更新Redis中的响应
-                        if len(response_buffer) % 100 == 0:
-                            await redis_client.hset(
-                                request_key,
-                                "partial_response", 
-                                response_buffer
-                            )
             except Exception as e:
                 logger.error(f"生成响应时出错: {str(e)}")
                 # 发送错误信息
@@ -887,7 +951,7 @@ async def streaming_response_generator(
                 if not response_buffer:
                     response_buffer = f"非常抱歉，我在处理您的请求时遇到了问题。错误信息: {str(e)[:100]}..."
             
-            # 13. 将响应添加到短期记忆
+            # 14. 将响应添加到短期记忆
             await memory_manager.add_message(
                 session_id=session_id,
                 user_id=user_id,
@@ -897,29 +961,29 @@ async def streaming_response_generator(
                 message_id=f"assistant-{message_id}"
             )
             
-            # 14. 存储完整响应到Redis
-            match_score_str = str(match_score)
-            match_reason_str = match_reason
-            
+            # 15. 存储完整数据到Redis
             await redis_client.hset(request_key, mapping={
                 "response": response_buffer,
+                "thinking_process": thinking_buffer if show_thinking else "",
+                "references": json.dumps(references),
                 "selected_role": json.dumps(role_info),
                 "role_id": role_id,
-                "match_score": match_score_str,
-                "match_reason": match_reason_str,
+                "match_score": str(match_score),
+                "match_reason": match_reason,
                 "status": "completed",
                 "completed_at": datetime.utcnow().isoformat()
             })
             
-            # 15. 添加到会话历史
+            # 16. 添加到会话历史
             history_key = f"two_phase:history:{session_id}"
             await redis_client.rpush(history_key, message_id)
             await redis_client.expire(history_key, 86400 * 7)  # 7天过期
             
-            # 16. 发送完成信号
+            # 17. 发送完成信号
             complete_data = {
                 "type": "complete",
-                "message_id": message_id
+                "message_id": message_id,
+                "has_thinking": show_thinking and bool(thinking_buffer)
             }
             yield f"data: {json.dumps(complete_data)}\n\n"
             

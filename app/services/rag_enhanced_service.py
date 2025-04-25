@@ -66,6 +66,15 @@ class RAGEnhancedService:
         self.ragflow_chat_id = settings.RAGFLOW_CHAT_ID
         self.stop_generation = {}  # Store message IDs that need to stop generation
         self._initialized = False
+        
+        # 调试模式配置
+        self.debug_mode = os.environ.get("RAG_DEBUG_MODE", "False").lower() == "true"
+        if self.debug_mode:
+            self.logger.setLevel(logging.DEBUG)
+            self.logger.info("RAG服务调试模式已启用")
+            self.logger.debug(f"RAG URL: {self.retrieval_url}")
+            self.logger.debug(f"RAG API Key: {self.api_key[:5]}...（隐藏剩余部分）")
+            self.logger.debug(f"RAG Chat ID: {self.ragflow_chat_id}")
     
     async def initialize(self):
         """Asynchronous initialization of the service"""
@@ -237,42 +246,45 @@ class RAGEnhancedService:
         return True
     
     def should_skip_rag_analysis(self, question: str) -> tuple[bool, str]:
+        """决定是否跳过RAG分析
+        
+        增强判断条件:
+        1. 基于问题长度和复杂度评估
+        2. 检测问题是否包含需要事实信息的关键词
+        3. 识别闲聊vs信息查询类型问题
+        
+        返回:
+            (是否跳过RAG, 原因说明)
         """
-        快速判断是否需要跳过RAG分析流程
+        # 简短问候语或简单指令不需要RAG
+        if len(question) < 10:
+            return True, "问题过短，无需RAG"
         
-        Args:
-            question: 用户问题
+        # 检测是否为闲聊型问题
+        chitchat_patterns = [
+            r"你好[啊吗？！。,，]?$", 
+            r"嗨[！。]?$",
+            r"你[是]?[谁]?[？]?$", 
+            r"谢谢[你！。]?$"
+        ]
+        for pattern in chitchat_patterns:
+            if re.search(pattern, question):
+                return True, "闲聊型问题，无需RAG"
         
-        Returns:
-            (是否跳过, 跳过原因)
-        """
-        # 清理并准备问题文本
-        cleaned_question = question.strip()
+        # 检测是否是请求事实信息的问题
+        info_seeking_keywords = ["什么是", "如何", "为什么", "解释", "定义", 
+                                 "方法", "步骤", "历史", "原因", "区别"]
         
-        # 规则1: 纯数字问题
-        if cleaned_question.isdigit():
-            return True, "纯数字问题无需RAG分析"
+        for keyword in info_seeking_keywords:
+            if keyword in question:
+                return False, f"问题包含信息查询关键词: {keyword}"
         
-        # 规则2: 极短问题
-        if len(cleaned_question) < 6:
-            return True, "问题过短，无需RAG分析"
-        
-        # 规则3: 常见问候语
-        greetings = ["你好", "hello", "hi", "嗨", "早上好", "晚上好", "下午好"]
-        if cleaned_question.lower() in greetings or any(g in cleaned_question.lower() for g in greetings):
-            return True, "简单问候语无需RAG分析"
-        
-        # 规则4: 无实质内容
-        if set(cleaned_question).issubset(set("!！?？.,，。;；:：""''\"' ")):
-            return True, "问题仅包含标点符号，无需RAG分析"
+        # 复杂长问题可能需要RAG
+        if len(question) > 50:
+            return False, "复杂长问题，可能需要RAG"
             
-        # 规则5: 简单指令
-        simple_commands = ["停止", "退出", "取消", "stop", "quit", "cancel", "谢谢", "谢谢你", "thanks", "thank you"]
-        if cleaned_question.lower() in simple_commands:
-            return True, "简单指令无需RAG分析"
-        
-        # 默认不跳过
-        return False, ""
+        # 默认不使用RAG
+        return True, "默认不使用RAG"
 
     async def analyze_question(self, question: str, model: str = None) -> dict:
         """
@@ -399,62 +411,16 @@ Please keep the analysis concise and logical, focusing on the relevance to the q
     
     async def retrieve_documents(self, query: str) -> List[Dict[str, Any]]:
         """
-        Retrieve related documents from the knowledge base
+        检索与查询相关的文档
         
-        Args:
-            query: Query content
+        参数:
+            query: 查询文本
             
-        Returns:
-            Retrieved document list
+        返回:
+            包含相关文档的列表
         """
-        # Ensure the service is initialized
-        await self._ensure_initialized()
-        
-        self.logger.info(f"Retrieving content from the knowledge base: {query[:50]}...")
-        
-        try:
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                payload = {
-                    "query": query,
-                    "chat_id": self.ragflow_chat_id
-                }
-                
-                headers = {
-                    "Content-Type": "application/json",
-                }
-                
-                # 只有在API密钥存在时才添加Authorization头
-                if self.api_key and self.api_key.strip():
-                    # 确保API密钥格式正确
-                    api_key = self.api_key.strip()
-                    if not api_key.startswith("skragflow-"):
-                        api_key = f"skragflow-{api_key}"
-                    headers["Authorization"] = f"Bearer {api_key}"
-                else:
-                    self.logger.warning("未提供API密钥，可能导致检索服务授权失败")
-                
-                response = await client.post(
-                    self.retrieval_url,
-                    json=payload,
-                    headers=headers
-                )
-                
-                if response.status_code != 200:
-                    self.logger.error(f"Failed to retrieve from the knowledge base: {response.status_code}, {response.text}")
-                    return []
-                
-                result = response.json()
-                documents = result.get("documents", [])
-                
-                if documents:
-                    self.logger.info(f"Retrieved {len(documents)} related documents")
-                else:
-                    self.logger.warning("No related documents retrieved")
-                
-                return documents
-        except Exception as e:
-            self.logger.error(f"An error occurred when retrieving documents: {str(e)}")
-            return []
+        # 直接调用新的静默检索方法
+        return await self._retrieve_knowledge_silent(query)
     
     def format_retrieved_documents(self, documents: List[Dict[str, Any]]) -> str:
         """
@@ -585,345 +551,159 @@ Answer:"""
         api_key: str = None,
         stream: bool = True,
         role_id: str = None,
-        auto_role_match: bool = False
+        auto_role_match: bool = False,
+        show_thinking: bool = False  # 新增参数：是否显示思考过程
     ) -> AsyncGenerator[Union[Dict, str], None]:
-        """
-        Process chat with RAG enhancement
+        """增强的聊天处理流程，支持显示思考过程
         
-        Args:
-            messages: message list
-            model: model name (optional)
-            session_id: session ID for conversation history retrieval
-            user_id: user ID for conversation history retrieval
-            enable_rag: whether enable RAG
-            lang: language, affects generated prompt, default zh
-            provider: LLM provider name
-            model_name: specific model name for this provider
-            api_key: API key
-            stream: whether to use streaming response
-            role_id: specific role ID to use
-            auto_role_match: whether to use automatic role matching
-            
-        Yields:
-            Streaming response or error message
+        参数:
+            messages: 对话消息列表
+            model: 模型名称（可选）
+            session_id: 会话ID（可选）
+            user_id: 用户ID（可选）
+            enable_rag: 是否启用RAG（可选，默认为True）
+            lang: 语言（可选，默认为中文）
+            provider: 提供商名称（可选）
+            model_name: 模型名称（可选）
+            api_key: API密钥（可选）
+            stream: 是否使用流式响应（可选，默认为True）
+            role_id: 角色ID（可选）
+            auto_role_match: 是否自动匹配角色（可选，默认为False）
+            show_thinking: 是否显示思考过程（可选，默认为False）
+        
+        生成:
+            消息块或事件数据
         """
         # 确保服务已初始化
         await self._ensure_initialized()
         
-        # 为本次请求生成唯一的消息ID
-        message_id = str(uuid.uuid4())
-        self.stop_generation[message_id] = False
-        
-        # 用于收集完整的AI响应
-        ai_response_parts = []
+        # 获取用户最后一条消息
         user_question = ""
+        for msg in reversed(messages):
+            if msg.get("role") == "user" and msg.get("content"):
+                user_question = msg.get("content")
+                break
         
-        # 在返回的第一个数据包中包含message_id，供前端保存和停止生成使用
-        yield {"message_id": message_id}
+        if not user_question:
+            yield {"type": "error", "message": "未找到有效的用户消息"}
+            return
         
-        # 验证会话是否存在
-        if session_id and user_id:
-            session_exists = await self.verify_session_exists(session_id, user_id)
-            if not session_exists:
-                self.logger.warning(f"会话 {session_id} 不存在，这可能是新会话或ID错误")
-                # 我们可以选择继续处理，但不会尝试加载历史消息
+        # 执行角色匹配（如果需要）
+        role_info = None
+        if auto_role_match:
+            match_result = await self.match_role_for_chat(
+                messages=messages,
+                session_id=session_id,
+                user_id=user_id,
+                lang=lang,
+                provider=provider,
+                model_name=model_name,
+                api_key=api_key
+            )
+            
+            if match_result and match_result.get("success"):
+                role_info = match_result.get("role", {})
+                role_id = role_info.get("id") or role_info.get("role_id") or role_info.get("_id")
         
-        try:
-            # 验证消息列表
-            if not messages or not isinstance(messages, list):
-                error_msg = "消息列表为空或格式不正确"
-                yield {"error": error_msg}
-                return
+        # 如果指定了角色ID但没有角色信息，获取角色信息
+        if role_id and not role_info:
+            role_info = await self.get_role_info(role_id)
+        
+        # 确定是否使用RAG
+        use_rag = False
+        rag_reason = ""
+        
+        if enable_rag:
+            should_skip, reason = self.should_skip_rag_analysis(user_question)
+            use_rag = not should_skip
+            rag_reason = reason
+        
+        # 准备处理流程
+        if use_rag and show_thinking:
+            # 使用RAG并显示思考过程
+            # 1. 发送思考模式开启信号
+            yield {"type": "thinking_mode", "enabled": True, "reason": rag_reason}
             
-            # 获取最后一条用户消息
-            last_user_message = ""
-            for msg in reversed(messages):
-                if msg.get("role") == "user":
-                    last_user_message = msg.get("content", "").strip()
-                    user_question = last_user_message
-                    break
-            
-            if not last_user_message:
-                error_msg = "找不到用户消息"
-                yield {"error": error_msg}
-                return
-            
-            # 确定要使用的模型
-            model_config = self._determine_model(model, provider, model_name, api_key)
-            if isinstance(model_config, str):
-                # 如果返回的是错误消息而不是模型配置
-                yield {"error": model_config}
-                return
-            
-            # 角色选择逻辑
-            role_info = {}
-            sys_msg = None
-            
-            # 优先自动角色匹配
-            if auto_role_match and not role_id:
-                logger.info("开始自动角色匹配")
-                try:
-                    # 传入session_id参数，限制在会话角色范围内
-                    match_result = await role_matching_service.find_matching_role(last_user_message, session_id)
-                    if match_result:
-                        role_id = match_result.get("role_id")
-                        
-                        # 使用匹配的角色信息
-                        if role_id:
-                            role_info = {
-                                "id": role_id,
-                                "name": match_result.get("name", ""),
-                                "match_reason": match_result.get("match_reason", ""),
-                                "score": match_result.get("score", 0)
-                            }
-                            
-                            # 获取角色系统消息
-                            from app.services.session_role_manager import SessionRoleManager
-                            session_role_manager = SessionRoleManager()
-                            role_data = await session_role_manager.get_role(role_id)
-                            if role_data and "system_prompt" in role_data:
-                                sys_msg = role_data["system_prompt"].strip()
-                                
-                                # 更新角色使用计数
-                                if session_id:
-                                    await session_role_manager.update_role_usage_count(session_id, role_id)
-                            
-                            # 输出角色匹配信息
-                            yield {
-                                "role_match": {
-                                    "success": True,
-                                    "role": role_info
-                                }
-                            }
-                except Exception as e:
-                    logger.error(f"自动角色匹配失败: {str(e)}")
-                    yield {"error": f"自动角色匹配失败: {str(e)}"}
-            
-            # 如果有指定角色ID
-            elif role_id:
-                logger.info(f"使用指定角色: {role_id}")
-                try:
-                    from app.services.session_role_manager import SessionRoleManager
-                    session_role_manager = SessionRoleManager()
-                    role_data = await session_role_manager.get_role(role_id)
-                    if role_data:
-                        role_info = {
-                            "id": role_id,
-                            "name": role_data.get("name", ""),
-                            "description": role_data.get("description", "")
-                        }
-                        
-                        # 获取角色系统消息
-                        if "system_prompt" in role_data:
-                            sys_msg = role_data["system_prompt"].strip()
-                            
-                            # 更新角色使用计数
-                            if session_id:
-                                await session_role_manager.update_role_usage_count(session_id, role_id)
-                    else:
-                        logger.warning(f"找不到角色: {role_id}")
-                        yield {"error": f"找不到角色: {role_id}"}
-                except Exception as e:
-                    logger.error(f"获取角色信息失败: {str(e)}")
-                    yield {"error": f"获取角色信息失败: {str(e)}"}
-            
-            # 如果没有系统消息，使用默认的
-            if not sys_msg:
-                sys_msg = DEFAULT_SYSTEM_PROMPT
-            
-            # 构建完整的消息列表
-            complete_messages = []
-            
-            # 添加系统消息
-            complete_messages.append({"role": "system", "content": sys_msg})
-            
-            # 获取历史消息（如果有会话ID和用户ID）
-            if session_id and user_id:
-                try:
-                    # 检查会话是否存在
-                    session_exists = await self.verify_session_exists(session_id, user_id)
-                    if not session_exists:
-                        logger.warning(f"会话 {session_id} 不存在，跳过历史消息加载")
-                    else:
-                        logger.info(f"开始获取会话 {session_id} 的历史消息")
-                        
-                        # 使用 CustomSession 获取会话信息
-                        session_data = await CustomSession.get_session_by_id(session_id)
-                        logger.info(f"获取会话数据: {session_data is not None}")
-                        
-                        if session_data:
-                            # 构建Redis消息键
-                            redis_key = f"messages:{user_id}:{session_id}"
-                            logger.info(f"准备从Redis获取消息，键名: {redis_key}")
-                            
-                            # 从内存管理器获取Redis客户端
-                            from app.memory.memory_manager import get_memory_manager
-                            memory_manager = await get_memory_manager()
-                            
-                            if memory_manager and memory_manager.short_term_memory and memory_manager.short_term_memory.redis:
-                                redis_client = memory_manager.short_term_memory.redis
-                                
-                                # 检查消息键是否存在
-                                key_exists = await redis_client.exists(redis_key)
-                                logger.info(f"Redis消息键 {redis_key} 存在: {key_exists}")
-                    
-                                if key_exists:
-                                    # 获取消息记录
-                                    messages_data = await redis_client.lrange(redis_key, 0, -1)
-                                    logger.info(f"从Redis获取到 {len(messages_data)} 条消息")
-                                    
-                                    history = []
-                                    
-                                    # 解析消息记录
-                                    for msg_data in messages_data:
-                                        try:
-                                            msg = json.loads(msg_data)
-                                            if msg.get("role") in ["user", "assistant", "system"]:
-                                                history.append(msg)
-                                        except json.JSONDecodeError:
-                                            logger.warning(f"解析消息失败: {msg_data[:100]}")
-                                            continue
-                                    
-                        # 将历史消息添加到完整消息列表中
-                                logger.info(f"成功解析 {len(history)} 条有效历史消息")
-                                for msg in history:
-                                    complete_messages.append({
-                                        "role": msg.get("role", "user"),
-                                        "content": msg.get("content", "")
-                                    })
-                                else:
-                                    logger.warning(f"Redis中不存在消息键 {redis_key}")
-                            else:
-                                logger.warning("Redis客户端不可用，无法获取历史消息")
-                        else:
-                            logger.warning(f"在MongoDB中找不到会话 {session_id}")
-                except Exception as e:
-                    logger.error(f"获取历史消息出错: {str(e)}", exc_info=True)
-                    # 如果获取历史消息失败，继续处理但记录错误
-            
-            # 添加当前消息
-            for msg in messages:
-                complete_messages.append({
-                    "role": msg.get("role", "user"),
-                    "content": msg.get("content", "")
-                })
-            
-            # 分析用户问题，确定是否需要搜索
-            search_needed = False
-            analysis = ""
-            if enable_rag:
-                # 使用分析器检查问题是否需要搜索相关文档
-                analysis_result = await self.analyze_question(last_user_message, model)
-                search_needed = analysis_result.get("need_rag", False)
-                analysis = analysis_result.get("analysis", "")
-                reason = analysis_result.get("reason", "")
-                
-                # 检查是否使用了快速规则跳过
-                if analysis_result.get("skip_full_analysis", False):
-                    self.logger.info(f"使用快速规则评估: {reason}")
+            # 2. 流式检索知识
+            documents = []
+            async for result in self._retrieve_knowledge(user_question):
+                if result["type"] == "document":
+                    # 收集文档，但不传递给客户端(这是内部类型)
+                    documents.append(result["content"])
                 else:
-                    self.logger.info(f"问题分析结果: 【需要检索】: {'是' if search_needed else '否'}")
-                    self.logger.debug(f"分析详情: {analysis[:200]}...")
+                    # 传递所有其他思考过程事件
+                    yield result
             
-            # 如果需要搜索，则检索文档并增强查询
-            if search_needed:
-                logger.info(f"从知识库检索内容: {last_user_message[:50]}...")
-                
-                try:
-                    # 检索相关文档
-                    retrieved_docs = await self.retrieve_documents(last_user_message)
-                    
-                    # 如果没有找到相关文档，发出警告并直接使用原始消息调用LLM
-                    if not retrieved_docs:
-                        logger.warning("未检索到相关文档")
-                        async for response in self.llm_service.generate_stream(
-                            complete_messages,
-                            config=model_config,
-                            message_id=message_id,
-                            stop_generation=self.stop_generation[message_id]
-                        ):
-                            # 收集响应以保存到内存
-                            if isinstance(response, dict) and "content" in response:
-                                ai_response_parts.append(response["content"])
-                            yield response
-                    else:
-                        # 构建格式化的上下文
-                        context_str = self.format_retrieved_documents(retrieved_docs)
-                    
-                        # 构建增强的提示
-                        augmented_msg = self._build_augmented_prompt(
-                            last_user_message, context_str, lang=lang
-                        )
-                        
-                        # 用增强的提示替换原始用户消息
-                        enhanced_messages = complete_messages.copy()
-                        enhanced_messages[-1]["content"] = augmented_msg
-                        
-                        # 调用LLM服务生成回复
-                        async for response in self.llm_service.generate_stream(
-                            enhanced_messages,
-                            config=model_config,
-                            message_id=message_id,
-                                stop_generation=self.stop_generation[message_id]
-                        ):
-                            # 收集响应以保存到内存
-                            if isinstance(response, dict) and "content" in response:
-                                    ai_response_parts.append(response["content"])
-                            yield response
-                    
-                except Exception as e:
-                    error_msg = f"处理RAG增强查询时出错: {str(e)}"
-                    logger.error(error_msg, exc_info=True)
-                    yield {"error": error_msg}
-                    return
+            # 如果检索到文档，将其添加到上下文
+            if documents:
+                rag_messages = await self._add_rag_to_context(
+                    messages.copy(), documents, role_info
+                )
             else:
-                # 不需要搜索，直接使用原始消息调用LLM
-                try:
-                    async for response in self.llm_service.generate_stream(
-                        complete_messages,
-                        config=model_config,
-                        message_id=message_id,
-                        stop_generation=self.stop_generation[message_id]
-                    ):
-                        # 收集响应以保存到内存
-                        if isinstance(response, dict) and "content" in response:
-                            ai_response_parts.append(response["content"])
-                        yield response
-                except Exception as e:
-                    error_msg = f"生成回复时出错: {str(e)}"
-                    logger.error(error_msg, exc_info=True)
-                    yield {"error": error_msg}
-                    return
+                # 未找到文档，使用原始消息
+                rag_messages = messages
             
-            # 保存对话到记忆（如果提供了会话ID和用户ID）
-            if session_id and user_id and ai_response_parts:
+            # 准备带有角色信息的消息
+            prepared_messages = await self._prepare_messages_with_role_info(
+                rag_messages, role_id, role_info
+            )
+            
+            # 生成回答
+            async for chunk in self.generate_response(
+                messages=prepared_messages,
+                model=model,
+                session_id=session_id,
+                user_id=user_id,
+                role_id=role_id,
+                role_info=role_info,
+                stream=True,
+                provider=provider,
+                model_name=model_name,
+                api_key=api_key
+            ):
+                if isinstance(chunk, str):
+                    yield {"type": "content", "content": chunk}
+                else:
+                    # 如果是引用或其他特殊类型数据，直接传递
+                    yield chunk
+        else:
+            # 不显示思考过程的处理
+            
+            # 如果使用RAG但不显示思考过程，仍然进行检索
+            rag_results = []
+            if use_rag:
                 try:
-                    # 组合完整的AI响应
-                    full_ai_response = "".join(ai_response_parts)
-                    logger.info(f"保存对话到记忆, 用户ID: {user_id}, 会话ID: {session_id}, AI响应长度: {len(full_ai_response)}")
-                    
-                    # 调用保存方法
-                    user_msg_id, ai_msg_id = await self.save_to_memory(
-                        session_id, user_id, user_question, full_ai_response, role_id
-                    )
-                    
-                    if user_msg_id and ai_msg_id:
-                        logger.info(f"对话已保存, 用户消息ID: {user_msg_id}, AI消息ID: {ai_msg_id}")
-                    else:
-                        logger.warning("保存对话失败")
+                    # 静默检索
+                    rag_results = await self._retrieve_knowledge_silent(user_question)
                 except Exception as e:
-                    logger.error(f"保存对话到记忆时出错: {str(e)}", exc_info=True)
-                    # 保存失败不影响响应返回
-                    
-        except Exception as e:
-            # 捕获整个处理过程中的所有其他错误
-            error_msg = f"处理聊天请求时出现意外错误: {str(e)}"
-            logger.error(error_msg, exc_info=True)
-            yield {"error": error_msg}
-        finally:
-            # 清理停止生成字典中的当前消息ID
-            if message_id in self.stop_generation:
-                del self.stop_generation[message_id]
+                    logger.error(f"静默RAG检索失败: {str(e)}")
+            
+            # 准备消息
+            if use_rag and rag_results:
+                # 添加RAG结果
+                messages = await self._add_rag_to_context(
+                    messages.copy(), rag_results, role_info
+                )
+            
+            # 准备带有角色信息的消息
+            prepared_messages = await self._prepare_messages_with_role_info(
+                messages, role_id, role_info
+            )
+            
+            # 生成回答
+            async for chunk in self.generate_response(
+                messages=prepared_messages,
+                model=model,
+                session_id=session_id,
+                user_id=user_id,
+                role_id=role_id,
+                role_info=role_info,
+                stream=stream,
+                provider=provider,
+                model_name=model_name,
+                api_key=api_key
+            ):
+                yield chunk
     
     async def save_to_memory(self, session_id: str, user_id: str, last_question: str, 
                         ai_response: str, role_id: Optional[str] = None):
@@ -1284,7 +1064,7 @@ Answer:"""
                     # 如果会话中只有一个角色，直接返回该角色
                     elif len(session_roles) == 1:
                         role = session_roles[0]
-                        role_id = role.get("role_id") or role.get("id") or str(role.get("_id"))
+                        role_id = role.get("id") or role.get("role_id") or str(role.get("_id"))
                         role_name = role.get("name") or role.get("role_name", "未知角色")
                         logger.info(f"[{request_id}] 会话只有一个角色，直接使用: {role_name}")
                         
@@ -1365,16 +1145,17 @@ Answer:"""
                     role = match_result.get("role", {})
                     role_id = role.get("id") or role.get("role_id") or str(role.get("_id"))
                     
-                    await asyncio.wait_for(
-                        self.redis.hset(f"chatrag:session:{session_id}:info", "matched_role_id", role_id),
-                        timeout=2.0
-                    )
-                    await asyncio.wait_for(
-                        self.redis.expire(f"chatrag:session:{session_id}:info", 86400),  # 1天过期
-                        timeout=1.0
-                    )
-                    redis_time = time.time() - redis_start
-                    logger.debug(f"[{request_id}] 保存匹配角色到Redis完成，耗时: {redis_time:.4f}秒")
+                    if role_id:
+                        await asyncio.wait_for(
+                            self.redis.hset(f"chatrag:session:{session_id}:info", "matched_role_id", role_id),
+                            timeout=2.0
+                        )
+                        await asyncio.wait_for(
+                            self.redis.expire(f"chatrag:session:{session_id}:info", 86400),  # 1天过期
+                            timeout=1.0
+                        )
+                        redis_time = time.time() - redis_start
+                        logger.debug(f"[{request_id}] 保存匹配角色到Redis完成，耗时: {redis_time:.4f}秒")
                 except Exception as e:
                     logger.warning(f"[{request_id}] 保存匹配角色到Redis失败: {str(e)}")
             
@@ -1475,7 +1256,7 @@ Answer:"""
                 logger.info(f"添加{len(rag_results)}条检索结果到上下文")
                 
                 # 添加RAG结果到系统提示
-                prepared_messages = await self._add_rag_to_context(prepared_messages, rag_results)
+                prepared_messages = await self._add_rag_to_context(prepared_messages, rag_results, role_info)
                 
                 # 可选：将结果以字典形式返回给前端（非文本内容）
                 yield {
@@ -1540,106 +1321,403 @@ Answer:"""
             logger.error(f"LLM生成回复时出错: {str(e)}")
             yield f"生成回复时出错: {str(e)}"
 
-    async def _retrieve_knowledge(self, query: str) -> List[Dict[str, Any]]:
-        """
-        Retrieve related documents from the knowledge base
+    async def _retrieve_knowledge(self, query: str) -> AsyncGenerator[Dict, None]:
+        """流式检索相关知识
         
-        Args:
-            query: Query content
+        参数:
+            query: 用户查询
             
-        Returns:
-            Retrieved document list
+        生成:
+            流式返回检索过程和结果
         """
-        # Ensure the service is initialized
-        await self._ensure_initialized()
+        # 发送检索开始信号
+        yield {"type": "thinking_start", "step": "开始检索相关信息..."}
         
-        self.logger.info(f"Retrieving content from the knowledge base: {query[:50]}...")
+        # 记录开始时间
+        thinking_start_time = time.time()
         
         try:
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                payload = {
-                    "query": query,
-                    "chat_id": self.ragflow_chat_id
-                }
-                
-                headers = {
-                    "Content-Type": "application/json",
-                }
-                
-                # 只有在API密钥存在时才添加Authorization头
-                if self.api_key and self.api_key.strip():
-                    # 确保API密钥格式正确
-                    api_key = self.api_key.strip()
-                    if not api_key.startswith("skragflow-"):
-                        api_key = f"skragflow-{api_key}"
-                    headers["Authorization"] = f"Bearer {api_key}"
-                else:
-                    self.logger.warning("未提供API密钥，可能导致检索服务授权失败")
-                
-                response = await client.post(
-                    self.retrieval_url,
-                    json=payload,
-                    headers=headers
+            # 分析查询，提取关键词
+            keywords = []
+            try:
+                yield {"type": "thinking_content", "content": "分析问题并提取关键词..."}
+                keywords = await asyncio.wait_for(
+                    self.role_service.extract_keywords_from_text(query, top_k=5),
+                    timeout=3.0
                 )
+                if keywords:
+                    yield {"type": "thinking_content", "content": f"提取到关键词: {', '.join(keywords)}"}
+                else:
+                    yield {"type": "thinking_content", "content": "未能提取到明确的关键词，将使用整个问题进行检索"}
+            except asyncio.TimeoutError:
+                yield {"type": "thinking_content", "content": "关键词提取超时，将使用完整问题进行检索"}
+            except Exception as e:
+                logger.error(f"关键词提取失败: {str(e)}")
+                yield {"type": "thinking_content", "content": "关键词提取失败，将使用完整问题进行检索"}
+            
+            # 使用统一的RAG接口进行检索
+            yield {"type": "thinking_content", "content": "连接到知识库检索服务..."}
+            
+            # 获取RAG接口参数
+            rag_url = self.retrieval_url
+            rag_api_key = self.api_key
+            chat_id = self.ragflow_chat_id
+            
+            if not rag_url or not rag_api_key or not chat_id:
+                logger.error("RAG服务配置不完整，无法使用知识库检索")
+                yield {"type": "thinking_content", "content": "知识库检索服务配置不完整，跳过检索步骤"}
+                yield {"type": "thinking_end", "document_count": 0, "thinking_time": 0}
+                return
+                
+            # 准备向RAG接口发送请求
+            retrieval_start_time = time.time()
+            yield {"type": "thinking_content", "content": "正在从知识库搜索相关内容..."}
+            
+            # 准备请求数据
+            headers = {
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {rag_api_key}"
+            }
+            
+            data = {
+                "model": "model",
+                "messages": [
+                    {"role": "system", "content": "你是一个知识库检索助手，请根据用户问题提供相关信息。"},
+                    {"role": "user", "content": query}
+                ],
+                "stream": True
+            }
+            
+            rag_results = []
+            full_content = ""
+            document_count = 0
+            
+            # 创建异步HTTP客户端
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                try:
+                    # 发送请求到RAG服务
+                    # 处理URL路径 - 确保基础URL不以/结束
+                    base_url = rag_url.rstrip('/')
+                    # 组装完整URL
+                    url = f"{base_url}/api/v1/chats_openai/{chat_id}/chat/completions"
+                    
+                    # 调试日志
+                    if self.debug_mode:
+                        self.logger.debug(f"发送RAG请求到URL: {url}")
+                        self.logger.debug(f"RAG请求头: {headers}")
+                        self.logger.debug(f"RAG请求体: {data}")
+                    
+                    # 发送请求并获取流式响应
+                    async with client.stream("POST", url, headers=headers, json=data) as response:
+                        if response.status_code != 200:
+                            error_msg = f"RAG服务请求失败: HTTP {response.status_code}"
+                            logger.error(error_msg)
+                            if self.debug_mode:
+                                try:
+                                    error_body = await response.aread()
+                                    logger.debug(f"RAG服务错误响应: {error_body.decode('utf-8', errors='replace')}")
+                                except:
+                                    pass
+                            yield {"type": "thinking_content", "content": error_msg}
+                            yield {"type": "thinking_end", "document_count": 0, "thinking_time": 0, "status": "error"}
+                            return
+                        
+                        # 处理流式响应
+                        buffer = ""
+                        doc_section = False
+                        current_doc = {}
+                        
+                        async for chunk in response.aiter_lines():
+                            if not chunk or not chunk.strip():
+                                continue
+                                
+                            # 处理SSE格式数据
+                            if chunk.startswith('data:'):
+                                data_str = chunk[5:].strip()
+                                
+                                if data_str == '[DONE]':
+                                    # 处理结束标志
+                                    break
+                                    
+                                try:
+                                    # 解析JSON数据
+                                    data = json.loads(data_str)
+                                    
+                                    # 提取内容 - 尝试多种可能的路径
+                                    content = ""
+                                    
+                                    # OpenAI格式
+                                    if 'choices' in data and len(data['choices']) > 0:
+                                        if 'delta' in data['choices'][0]:
+                                            content = data['choices'][0]['delta'].get('content', '')
+                                        elif 'message' in data['choices'][0]:
+                                            content = data['choices'][0]['message'].get('content', '')
+                                    
+                                    # 直接content字段
+                                    if not content and 'content' in data:
+                                        content = data['content']
+                                        
+                                    if content:
+                                        buffer += content
+                                        full_content += content
+                                        
+                                        # 检测是否进入文档部分
+                                        if "文档：" in content or "Document:" in content:
+                                            doc_section = True
+                                            current_doc = {
+                                                "title": "",
+                                                "content": "",
+                                                "relevance": 0.9  # 默认相关度
+                                            }
+                                        
+                                        # 处理文档部分
+                                        if doc_section:
+                                            if "标题：" in content or "Title:" in content:
+                                                # 提取标题
+                                                title_match = re.search(r"(?:标题：|Title:)(.+?)(?:\n|$)", content)
+                                                if title_match:
+                                                    current_doc["title"] = title_match.group(1).strip()
+                                            
+                                            if "内容：" in content or "Content:" in content:
+                                                # 提取内容
+                                                content_match = re.search(r"(?:内容：|Content:)(.+?)(?:\n|$)", content)
+                                                if content_match:
+                                                    current_doc["content"] = content_match.group(1).strip()
+                                            
+                                            if "相关度：" in content or "Relevance:" in content:
+                                                # 提取相关度
+                                                relevance_match = re.search(r"(?:相关度：|Relevance:)\s*([\d.]+)", content)
+                                                if relevance_match:
+                                                    try:
+                                                        current_doc["relevance"] = float(relevance_match.group(1))
+                                                    except:
+                                                        pass
+                                            
+                                            # 检测文档是否完整
+                                            if current_doc["title"] and current_doc["content"] and "---" in content:
+                                                # 文档处理完毕
+                                                document_count += 1
+                                                rag_results.append(current_doc)
+                                                
+                                                # 向客户端发送引用信息
+                                                yield {
+                                                    "type": "thinking_reference",
+                                                    "document_id": document_count,
+                                                    "title": current_doc["title"],
+                                                    "content": current_doc["content"][:300] + "..." if len(current_doc["content"]) > 300 else current_doc["content"],
+                                                    "relevance": current_doc["relevance"]
+                                                }
+                                                
+                                                # 重置文档状态
+                                                doc_section = False
+                                                current_doc = {}
+                                        
+                                        # 周期性向客户端发送思考内容
+                                        if len(buffer) > 100:
+                                            yield {"type": "thinking_content", "content": buffer}
+                                            buffer = ""
+                                        
+                                except json.JSONDecodeError:
+                                    continue
+                    
+                    retrieval_time = time.time() - retrieval_start_time
+                    yield {"type": "thinking_content", "content": f"知识库检索完成，找到 {document_count} 个相关文档，耗时 {retrieval_time:.2f} 秒"}
+                    
+                except httpx.TimeoutException:
+                    logger.error("RAG服务请求超时")
+                    yield {"type": "thinking_content", "content": "知识库检索超时，将使用已有知识回答问题"}
+                except Exception as e:
+                    logger.error(f"RAG服务请求失败: {str(e)}")
+                    yield {"type": "thinking_content", "content": f"知识库检索过程中出错: {str(e)}"}
+            
+            # 思考总结
+            if rag_results:
+                yield {"type": "thinking_content", "content": "整合文档信息，准备回答问题..."}
+            else:
+                yield {"type": "thinking_content", "content": "没有找到相关信息，将使用已有知识回答问题..."}
+            
+            # 检索结束信号
+            thinking_time = time.time() - thinking_start_time
+            yield {
+                "type": "thinking_end", 
+                "document_count": document_count,
+                "thinking_time": round(thinking_time * 100) / 100
+            }
+            
+            # 不再使用 return [], 而是使用 yield 传递文档信息
+            for doc in rag_results:
+                yield {"type": "document", "content": doc}
+            
+        except Exception as e:
+            # 出错时发送错误信号
+            logger.error(f"知识检索过程出错: {str(e)}")
+            yield {"type": "thinking_error", "error": f"检索过程出错: {str(e)}"}
+            
+            # 发送思考结束信号
+            yield {"type": "thinking_end", "document_count": 0, "status": "error"}
+    
+    async def _retrieve_knowledge_silent(self, query: str) -> List[Dict]:
+        """静默检索知识，不返回中间过程"""
+        try:
+            # 获取RAG接口参数
+            rag_url = self.retrieval_url
+            rag_api_key = self.api_key
+            chat_id = self.ragflow_chat_id
+            
+            if not rag_url or not rag_api_key or not chat_id:
+                logger.error("RAG服务配置不完整，无法使用知识库检索")
+                return []
+            
+            # 准备请求数据
+            headers = {
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {rag_api_key}"
+            }
+            
+            data = {
+                "model": "model",
+                "messages": [
+                    {"role": "system", "content": "你是一个知识库检索助手，请根据用户问题提供相关信息。"},
+                    {"role": "user", "content": query}
+                ],
+                "stream": False  # 非流式请求
+            }
+            
+            # 创建异步HTTP客户端
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                # 发送请求到RAG服务
+                # 处理URL路径 - 确保基础URL不以/结束
+                base_url = rag_url.rstrip('/')
+                # 组装完整URL
+                url = f"{base_url}/api/v1/chats_openai/{chat_id}/chat/completions"
+                
+                # 调试日志
+                if self.debug_mode:
+                    self.logger.debug(f"发送静默RAG请求到URL: {url}")
+                    self.logger.debug(f"RAG请求头: {headers}")
+                    self.logger.debug(f"RAG请求体: {data}")
+                
+                response = await client.post(url, headers=headers, json=data)
                 
                 if response.status_code != 200:
-                    self.logger.error(f"Failed to retrieve from the knowledge base: {response.status_code}, {response.text}")
+                    logger.error(f"RAG服务请求失败: HTTP {response.status_code}")
+                    if self.debug_mode:
+                        try:
+                            error_body = response.text
+                            logger.debug(f"RAG服务错误响应: {error_body}")
+                        except:
+                            pass
                     return []
                 
-                result = response.json()
-                documents = result.get("documents", [])
+                # 解析响应
+                try:
+                    data = response.json()
+                    
+                    # 提取内容
+                    content = ""
+                    if 'choices' in data and len(data['choices']) > 0:
+                        if 'message' in data['choices'][0]:
+                            content = data['choices'][0]['message'].get('content', '')
+                    
+                    # 如果没有找到内容，返回空结果
+                    if not content:
+                        return []
+                    
+                    # 解析内容中的文档部分
+                    rag_results = []
+                    
+                    # 使用正则表达式匹配文档部分
+                    document_pattern = r"(?:文档|Document)[\s\d]*:[\s\n]*((?:.|\n)*?)(?=---|\Z)"
+                    title_pattern = r"(?:标题|Title)[\s]*:[\s]*(.*?)(?:\n|$)"
+                    content_pattern = r"(?:内容|Content)[\s]*:[\s]*(.*?)(?:\n|$)"
+                    relevance_pattern = r"(?:相关度|Relevance)[\s]*:[\s]*([\d.]+)"
+                    
+                    # 查找所有文档
+                    for doc_match in re.finditer(document_pattern, content, re.MULTILINE):
+                        doc_text = doc_match.group(1).strip()
+                        
+                        # 提取文档属性
+                        title = "未知文档"
+                        title_match = re.search(title_pattern, doc_text)
+                        if title_match:
+                            title = title_match.group(1).strip()
+                        
+                        doc_content = ""
+                        content_match = re.search(content_pattern, doc_text)
+                        if content_match:
+                            doc_content = content_match.group(1).strip()
+                        
+                        relevance = 0.7  # 默认相关度
+                        relevance_match = re.search(relevance_pattern, doc_text)
+                        if relevance_match:
+                            try:
+                                relevance = float(relevance_match.group(1))
+                            except:
+                                pass
+                        
+                        # 添加到结果列表
+                        if title and doc_content:
+                            rag_results.append({
+                                "title": title,
+                                "content": doc_content,
+                                "relevance": relevance,
+                                "score": relevance  # 兼容原有接口
+                            })
+                    
+                    return rag_results
+                    
+                except Exception as e:
+                    logger.error(f"解析RAG响应失败: {str(e)}")
+                    return []
                 
-                if documents:
-                    self.logger.info(f"Retrieved {len(documents)} related documents")
-                else:
-                    self.logger.warning("No related documents retrieved")
-                
-                return documents
         except Exception as e:
-            self.logger.error(f"An error occurred when retrieving documents: {str(e)}")
+            logger.error(f"静默知识检索失败: {str(e)}")
             return []
     
-    async def _add_rag_to_context(self, messages: List[dict], rag_results: List[Dict[str, Any]]) -> List[dict]:
-        """
-        添加检索结果到消息上下文中
+    async def _add_rag_to_context(self, messages: List[dict], rag_results: List[Dict[str, Any]], role_info: Dict = None) -> List[dict]:
+        """将RAG结果添加到消息上下文中，增强角色风格
         
-        Args:
+        参数:
             messages: 原始消息列表
-            rag_results: 检索结果
+            rag_results: 检索到的相关文档
+            role_info: 角色信息
             
-        Returns:
-            添加了RAG结果的消息列表
+        返回:
+            增强后的消息列表
         """
-        # Ensure the service is initialized
-        await self._ensure_initialized()
+        if not rag_results:
+            return messages
         
-        # Format retrieved documents for use in prompts
-        # No need for await here since format_retrieved_documents is synchronous
-        context_str = self.format_retrieved_documents(rag_results)
+        # 格式化检索结果
+        context = self.format_retrieved_documents(rag_results)
         
-        # Create a new messages list with the same content
-        new_messages = messages.copy()
+        # 如果提供了角色信息，使用角色感知的RAG提示
+        if role_info:
+            system_prompt = self._build_role_aware_rag_prompt(context, role_info)
+        else:
+            # 使用默认格式
+            system_prompt = f"""请基于以下参考信息回答用户的问题：
+
+{context}
+
+如果参考信息不足以回答问题，可以使用自己的知识，但请明确指出。
+请直接回答问题，不要提及你在使用"参考信息"。
+"""
         
-        # If the last message is from the user, add the RAG context to the system message
-        if new_messages and new_messages[-1]["role"] == "user":
-            # Find a system message if one exists
-            system_idx = None
-            for i, msg in enumerate(new_messages):
-                if msg["role"] == "system":
-                    system_idx = i
-                    break
-            
-            # If there's a system message, add the context to it
-            if system_idx is not None:
-                new_messages[system_idx]["content"] = new_messages[system_idx]["content"] + "\n\n参考资料:\n" + context_str
-            else:
-                # Otherwise, add a new system message with the context
-                new_messages.insert(0, {
-                    "role": "system",
-                    "content": "请基于以下参考资料回答用户的问题：\n\n" + context_str
-                })
+        # 查找是否已有系统消息
+        has_system_message = False
+        for i, msg in enumerate(messages):
+            if msg["role"] == "system":
+                # 增强现有系统消息
+                messages[i]["content"] = system_prompt
+                has_system_message = True
+                break
         
-        return new_messages
+        # 如果没有系统消息，添加一个
+        if not has_system_message:
+            messages.insert(0, {"role": "system", "content": system_prompt})
+        
+        return messages
     
     async def _prepare_messages_with_role_info(self, messages: List[dict], role_id: str, role_info: Dict[str, Any] = None) -> List[dict]:
         """
@@ -1756,3 +1834,36 @@ Answer:"""
         """
         # 为保持兼容性，调用新的实现
         return await self._prepare_messages_with_role_info(messages, role_id, None) 
+
+    def _build_role_aware_rag_prompt(self, context: str, role_info: Dict) -> str:
+        """构建保持角色风格的RAG提示模板
+        
+        参数:
+            context: 检索到的上下文信息
+            role_info: 角色信息
+            
+        返回:
+            增强后的提示模板
+        """
+        role_name = role_info.get("name", "助手")
+        personality = role_info.get("personality", "")
+        speech_style = role_info.get("speech_style", "")
+        
+        # 获取原始系统提示
+        original_prompt = role_info.get("system_prompt", "你是一个助手，请回答用户的问题。")
+        
+        # 构建增强提示
+        rag_prompt = f"""{original_prompt}
+
+在回答时，请参考以下信息:
+{context}
+
+请确保你的回答满足以下要求:
+1. 保持角色设定: 你是{role_name}{", " + personality if personality else ""}
+2. 使用适当的说话风格: {speech_style if speech_style else "自然、专业的语气"}
+3. 回答要基于提供的参考信息，确保信息准确
+4. 如果参考信息不足以回答问题，可以使用你的知识，但要清晰说明
+
+请直接回答问题，不要提及你在使用"参考信息"。
+"""
+        return rag_prompt

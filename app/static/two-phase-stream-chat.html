@@ -5,6 +5,10 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>流式API演示</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.7.0/styles/github.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/markdown-it@13.0.1/dist/markdown-it.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.7.0/highlight.min.js"></script>
     <style>
         body {
             padding: 20px;
@@ -38,13 +42,20 @@
         .message-container {
             display: flex;
             margin-bottom: 15px;
-            align-items: flex-start; /* 垂直对齐顶部 */
+            max-width: 100%;
         }
-
-        /* 用户消息容器特殊样式 */
-        .message-container.user-container {
-            flex-direction: row-reverse; /* 反向排列，使用户名在右侧 */
-            justify-content: flex-start;
+        .user-container {
+            flex-direction: row;
+            align-items: flex-start;
+            justify-content: flex-end;
+        }
+        .user-name-label {
+            font-size: 12px;
+            color: #555;
+            margin-left: 10px;
+            padding-top: 10px;
+            font-weight: 500;
+            white-space: nowrap;
         }
         #errorContainer {
             display: none;
@@ -104,82 +115,555 @@
             color: #856404;
         }
 
-        /* 文本弹窗样式 */
+        /* 思考容器样式 */
+        .thinking-container {
+            background-color: #f5f7f9;
+            border-radius: 12px;
+            margin: 10px 0;
+            overflow: hidden;
+            transition: all 0.3s ease;
+            border-left: 3px solid #1a73e8;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+        }
+        
+        .thinking-header {
+            padding: 12px 15px;
+            background-color: #eef2f7;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            cursor: pointer;
+            user-select: none;
+        }
+        
+        .thinking-title {
+            font-weight: 600;
+            color: #444;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        
+        .thinking-title i {
+            color: #1a73e8;
+        }
+        
+        .thinking-reason {
+            font-size: 13px;
+            color: #666;
+            margin-left: 10px;
+            font-style: italic;
+        }
+        
+        .thinking-toggle {
+            background: none;
+            border: none;
+            color: #666;
+            cursor: pointer;
+            padding: 4px;
+            font-size: 14px;
+            border-radius: 50%;
+            width: 24px;
+            height: 24px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: background-color 0.2s;
+        }
+        
+        .thinking-toggle:hover {
+            background-color: rgba(0,0,0,0.05);
+        }
+        
+        .thinking-content {
+            padding: 15px;
+            line-height: 1.6;
+            color: #333;
+            background-color: #fafcff;
+            border-bottom: 1px solid #eee;
+            overflow-x: auto;
+            display: block; /* Changed from max-height: 0 */
+        }
+        
+        .thinking-step {
+            margin: 8px 0;
+            padding: 8px 12px;
+            border-left: 2px solid #1a73e8;
+            background-color: white;
+            border-radius: 0 4px 4px 0;
+            font-family: 'Courier New', monospace;
+            font-size: 14px;
+            white-space: pre-wrap;
+            overflow-wrap: break-word;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+            position: relative; /* 用于定位详情按钮 */
+            display: flex; /* 使用flex布局 */
+            align-items: flex-start; /* 顶部对齐 */
+        }
+        
+        .thinking-step-content {
+            flex: 1;
+            overflow-wrap: break-word;
+            white-space: pre-wrap;
+            font-size: 14px;
+            line-height: 1.5;
+        }
+        
+        .thinking-detail-btn {
+            background: none;
+            border: none;
+            color: #aaa;
+            cursor: pointer;
+            font-size: 14px;
+            padding: 2px;
+            margin-left: 8px;
+            border-radius: 4px;
+            width: 24px;
+            height: 24px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.2s;
+            flex-shrink: 0;
+        }
+        
+        .thinking-detail-btn:hover {
+            background-color: #f0f4f8;
+            color: #1a73e8;
+        }
+        
+        .thinking-step.typing::after {
+            content: '▌';
+            animation: blink 1s step-end infinite;
+        }
+        
+        @keyframes blink {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0; }
+        }
+        
+        .thinking-references {
+            padding: 10px 15px;
+            background-color: #f5f8ff;
+            display: block; /* Changed from max-height: 0 */
+        }
+        
+        .reference-card {
+            margin: 10px 0;
+            border-radius: 8px;
+            overflow: hidden;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+            background-color: white;
+            transition: transform 0.2s;
+            border: 1px solid #eaeef2;
+        }
+        
+        .reference-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 8px rgba(0,0,0,0.15);
+        }
+        
+        .reference-header {
+            padding: 12px 15px;
+            background-color: #f0f4f8;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid #eaeef2;
+        }
+        
+        .reference-title {
+            font-weight: 600;
+            color: #333;
+            flex: 1;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        
+        .reference-score {
+            font-size: 12px;
+            color: #777;
+            margin-right: 10px;
+            padding: 2px 6px;
+            background-color: #e6f7ff;
+            border-radius: 10px;
+            white-space: nowrap;
+        }
+        
+        .reference-toggle {
+            background-color: #f5f7fa;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            padding: 2px 8px;
+            font-size: 12px;
+            cursor: pointer;
+            color: #555;
+            transition: all 0.2s;
+        }
+        
+        .reference-toggle:hover {
+            background-color: #e6f7ff;
+            border-color: #1a73e8;
+            color: #1a73e8;
+        }
+        
+        .reference-content {
+            max-height: 0;
+            overflow: hidden;
+            transition: max-height 0.5s ease;
+            padding: 0 15px;
+            background-color: white;
+        }
+        
+        .reference-content p {
+            margin: 12px 0;
+            line-height: 1.6;
+            color: #333;
+        }
+        
+        .thinking-summary {
+            padding: 12px 15px;
+            background-color: #eef2f7;
+            color: #555;
+            font-size: 14px;
+            text-align: center;
+            border-top: 1px solid #e0e6ed;
+        }
+        
+        .thinking-error {
+            padding: 12px 15px;
+            background-color: #fde8e8;
+            color: #e53e3e;
+            margin: 10px 0;
+            border-radius: 6px;
+            border-left: 3px solid #e53e3e;
+        }
+        
+        .thinking-response-divider {
+            height: 2px;
+            background: linear-gradient(90deg, rgba(26,115,232,0) 0%, rgba(26,115,232,0.5) 50%, rgba(26,115,232,0) 100%);
+            margin: 20px 0;
+            position: relative;
+        }
+        
+        .thinking-response-divider::after {
+            content: attr(data-role-name) " 回答";
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background-color: white;
+            padding: 0 10px;
+            color: #1a73e8;
+            font-size: 12px;
+            font-weight: 500;
+        }
+        
+        /* 响应容器样式 */
+        .response-container {
+            display: flex;
+            margin: 15px 0 25px 0; /* 增加底部间距，给角色名腾出空间 */
+            position: relative; /* For positioning the "loading" indicator and role label */
+        }
+        
+        .response-avatar {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            background-color: #1a73e8;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-weight: bold;
+            margin-right: 12px;
+            flex-shrink: 0;
+            position: relative; /* 为角色标签定位 */
+        }
+        
+        .response-content {
+            flex: 1;
+            padding: 16px;
+            background-color: white;
+            border-radius: 12px;
+            box-shadow: 0 3px 10px rgba(0,0,0,0.1);
+            line-height: 1.6;
+            color: #333;
+            transition: all 0.3s ease;
+        }
+        
+        .response-content.loading::after {
+            content: '▌';
+            display: inline-block;
+            animation: blink 1s step-end infinite;
+        }
+        
+        .response-actions {
+            display: flex;
+            justify-content: flex-end;
+            gap: 10px;
+            margin-top: 10px;
+            padding-top: 8px;
+            border-top: 1px solid #eee;
+        }
+        
+        .action-btn {
+            background-color: #f5f7fa;
+            border: 1px solid #ddd;
+            border-radius: 50%;
+            width: 36px;
+            height: 36px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            transition: all 0.2s;
+            font-size: 16px;
+        }
+        
+        .action-btn:hover {
+            background-color: #e6f7ff;
+            border-color: #1a73e8;
+            transform: translateY(-2px);
+        }
+        
+        .like-btn:hover {
+            background-color: #e6fff7;
+            border-color: #28a745;
+        }
+        
+        .dislike-btn:hover {
+            background-color: #ffebee;
+            border-color: #dc3545;
+        }
+        
+        .copy-btn:hover {
+            background-color: #e6f7ff;
+            border-color: #1a73e8;
+        }
+        
+        .regen-btn:hover {
+            background-color: #fff3e0;
+            border-color: #ff9800;
+        }
+        
+        /* Toast notification styles */
+        .toast {
+            visibility: hidden;
+            min-width: 250px;
+            background-color: #333;
+            color: white;
+            text-align: center;
+            border-radius: 4px;
+            padding: 16px;
+            position: fixed;
+            z-index: 1000;
+            left: 50%;
+            transform: translateX(-50%);
+            bottom: 30px;
+            font-size: 14px;
+            box-shadow: 0 4px 8px rgba(0,0,0,0.2);
+            opacity: 0;
+            transition: opacity 0.3s, visibility 0.3s;
+        }
+        
+        .toast.show {
+            visibility: visible;
+            opacity: 1;
+        }
+        
+        /* Modal styles for detailed content */
         .text-modal {
             display: none;
             position: fixed;
-            top: 0;
+            z-index: 1001;
             left: 0;
+            top: 0;
             width: 100%;
             height: 100%;
-            background-color: rgba(0, 0, 0, 0.7);
-            z-index: 1000;
-            justify-content: center;
-            align-items: center;
+            overflow: auto;
+            background-color: rgba(0,0,0,0.4);
         }
-
+        
         .text-modal-content {
-            background-color: #fff;
+            background-color: #fefefe;
+            margin: 10% auto;
             padding: 20px;
-            border-radius: 8px;
+            border: 1px solid #888;
             width: 80%;
-            max-height: 80vh;
-            overflow-y: auto;
-            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
-            position: relative;
+            max-width: 800px;
+            border-radius: 8px;
+            box-shadow: 0 4px 8px rgba(0,0,0,0.2);
         }
-
+        
+        .text-modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding-bottom: 10px;
+            border-bottom: 1px solid #eee;
+            margin-bottom: 15px;
+        }
+        
+        .text-modal-title {
+            font-weight: 600;
+            font-size: 18px;
+            color: #333;
+        }
+        
         .text-modal-close {
-            position: absolute;
-            top: 10px;
-            right: 15px;
-            font-size: 24px;
-            font-weight: bold;
             color: #aaa;
+            font-size: 28px;
+            font-weight: bold;
             cursor: pointer;
         }
-
+        
         .text-modal-close:hover {
             color: #333;
         }
-
-        .text-modal-title {
-            margin-top: 0;
-            margin-bottom: 15px;
-            padding-bottom: 10px;
-            border-bottom: 1px solid #eee;
-        }
-
+        
         .text-modal-body {
-            white-space: pre-wrap;
-            font-family: monospace;
-            background-color: #f8f9fa;
-            padding: 15px;
-            border-radius: 4px;
-            border: 1px solid #e9ecef;
-            font-size: 14px;
-            line-height: 1.5;
             max-height: 60vh;
             overflow-y: auto;
-            word-break: break-word;
+            padding: 10px;
+            font-size: 14px;
+            line-height: 1.6;
+            white-space: pre-wrap;
         }
-
-        .text-expandable {
+        
+        .text-modal-footer {
+            margin-top: 15px;
+            padding-top: 10px;
+            border-top: 1px solid #eee;
+            text-align: right;
+        }
+        
+        /* 自定义滚动条样式 */
+        .text-modal-body::-webkit-scrollbar {
+            width: 8px;
+        }
+        
+        .text-modal-body::-webkit-scrollbar-track {
+            background: #f1f1f1;
+            border-radius: 4px;
+        }
+        
+        .text-modal-body::-webkit-scrollbar-thumb {
+            background: #c1c1c1;
+            border-radius: 4px;
+        }
+        
+        .text-modal-body::-webkit-scrollbar-thumb:hover {
+            background: #a1a1a1;
+        }
+        
+        .reference-detail-btn {
+            background: none;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            width: 28px;
+            height: 28px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
             cursor: pointer;
+            margin-right: 6px;
+            color: #666;
+            font-size: 12px;
+            transition: all 0.2s;
+        }
+        
+        .reference-detail-btn:hover {
+            background-color: #e6f7ff;
+            border-color: #1a73e8;
+            color: #1a73e8;
+        }
+        
+        .role-label {
+            font-size: 12px;
+            color: #555;
+            margin-top: 4px;
+            text-align: center;
+            font-weight: 500;
+            position: absolute;
+            width: 100%;
+            left: 0;
+            bottom: -18px;
+        }
+        
+        /* 匹配信息区域样式 */
+        .match-info-area {
+            margin: 15px 0;
+            padding: 12px;
+            background-color: #e6f7ff;
+            border-radius: 8px;
+            border: 1px solid #b3e0ff;
+        }
+        
+        .match-info-title {
+            font-weight: 600;
+            color: #1a73e8;
+            margin-bottom: 8px;
+            font-size: 14px;
+            display: flex;
+            align-items: center;
+        }
+        
+        .match-info-title::before {
+            content: '\f52a';  /* FontAwesome匹配图标 */
+            font-family: 'Font Awesome 6 Free';
+            font-weight: 900;
+            margin-right: 8px;
+            color: #1a73e8;
+        }
+        
+        .match-info-item {
+            margin: 6px 0;
+            font-size: 13px;
+            color: #333;
+            line-height: 1.4;
+        }
+        
+        .match-role-name {
+            font-weight: 600;
+            color: #1a73e8;
+        }
+        
+        .match-score {
+            font-weight: 600;
+            color: #28a745;
+        }
+        
+        .match-reason {
+            font-style: italic;
+            color: #555;
+        }
+        
+        /* 打字机效果样式，修改之前的typing动画 */
+        @keyframes typing {
+            from { width: 0 }
+            to { width: 100% }
+        }
+        
+        @keyframes blink-caret {
+            from, to { border-color: transparent }
+            50% { border-color: #1a73e8 }
+        }
+        
+        .thinking-step.typing {
+            overflow: hidden;
+            white-space: nowrap;
             position: relative;
         }
-
-        .text-expandable:hover::after {
-            content: "双击放大查看";
-            position: absolute;
-            top: 0;
-            right: 0;
-            background-color: rgba(0, 0, 0, 0.7);
-            color: white;
-            padding: 2px 6px;
-            font-size: 12px;
-            border-radius: 3px;
-            pointer-events: none;
+        
+        .thinking-step.typing .thinking-step-content {
+            overflow: hidden;
+            white-space: nowrap;
+            border-right: 2px solid transparent;
+            animation: 
+                typing 3.5s steps(40, end),
+                blink-caret 0.75s step-end infinite;
         }
     </style>
 </head>
@@ -187,9 +671,14 @@
     <!-- 文本弹窗 -->
     <div id="textModal" class="text-modal">
         <div class="text-modal-content">
-            <span class="text-modal-close">&times;</span>
-            <h4 class="text-modal-title">详细内容</h4>
+            <div class="text-modal-header">
+                <h4 class="text-modal-title">详细内容</h4>
+                <span class="text-modal-close">&times;</span>
+            </div>
             <div id="textModalBody" class="text-modal-body"></div>
+            <div class="text-modal-footer">
+                <button id="textModalCloseBtn" class="btn btn-secondary">关闭</button>
+            </div>
         </div>
     </div>
 
@@ -233,9 +722,16 @@
                 <div class="form-group mb-3">
                     <label for="apiEndpoint" class="form-label">发送消息地址</label>
                     <select id="apiEndpoint" class="form-select">
-                        <option value="/api/two-phase-stream/generate">默认地址 (/api/two-phase-stream/generate)</option>
-                        <option value="/api/two-phase/generate">http://localhost:8000/api/two-phase/generate</option>
+                        <option value="/api/two-phase-stream/generate">流式思考 (/api/two-phase-stream/generate)</option>
+                        <option value="/api/two-phase/generate" selected>标准接口 (/api/two-phase/generate)</option>
                     </select>
+                </div>
+
+                <div class="form-check mb-3">
+                    <input class="form-check-input" type="checkbox" id="showThinking" checked>
+                    <label class="form-check-label" for="showThinking">
+                        显示AI思考过程
+                    </label>
                 </div>
 
                 <div class="mt-4 text-center">
@@ -265,6 +761,34 @@
             let lastMessageId = null;
             let currentEventSource = null;
             let currentUserName = "用户"; // 默认用户名
+            let markdownEnabled = false; // 是否启用Markdown渲染
+            let lastUserMessage = null; // 最后一条用户消息
+            let currentFeedbackMessageId = null; // 当前反馈消息ID
+            let currentFeedbackState = 'pending'; // 当前反馈状态
+            
+            let currentThinkingContainer = null;
+            let currentResponseContainer = null;
+            let isThinking = false;
+            let thinkingStep = '';
+            let responseContent = '';
+            let typewriterInterval = null;
+            let typingSpeed = 15; // ms per character
+            
+            let isProcessingMessage = false; // 标记是否正在处理消息
+            let lastSentMessage = ""; // 记录最后发送的消息内容
+            let lastSentTime = 0; // 记录最后发送消息的时间
+            
+            // SSE错误处理
+            function handleSSEError(error) {
+                console.error('SSE连接错误:', error);
+                showError('与服务器的连接已断开。请刷新页面重试。');
+                if (currentEventSource) {
+                    currentEventSource.close();
+                    currentEventSource = null;
+                }
+                typingIndicator.style.display = 'none';
+                sendBtn.disabled = false;
+            }
 
             // 解析URL参数函数
             function getUrlParams() {
@@ -279,59 +803,59 @@
                 return params;
             }
 
-            // 检查并处理URL参数
+            // 修改processUrlParams函数，使其能正确处理和显示URL参数
             function processUrlParams() {
                 const params = getUrlParams();
-                console.log("URL参数:", params);
-
-                // 检查displayParams参数是否为true
-                if (params.displayParams === "true" && params.session_id && params.userName && params.userId) {
-                    // 设置会话ID
+                
+                if (params.session_id) {
                     currentSessionId = params.session_id;
-                    // 设置用户名
-                    currentUserName = params.userName;
-
-                    // 更新会话信息显示
+                    
+                    // 更新会话信息显示，包含更多用户信息
                     sessionInfo.innerHTML = `
-                        <strong>会话ID:</strong> ${params.session_id}<br>
-                        <strong>用户:</strong> ${params.userName}<br>
-                        <strong>用户ID:</strong> ${params.userId}<br>
+                        <strong>会话ID:</strong> ${currentSessionId.substring(0, 8)}...<br>
+                        <strong>用户:</strong> ${params.userName || '未知用户'}<br>
+                        <strong>用户ID:</strong> ${params.userId || '未知ID'}<br>
                         <strong>来源:</strong> URL参数
                     `;
-
+                    
+                    // 获取会话角色信息
+                    fetchSessionRoles(currentSessionId);
+                    
                     // 禁用创建会话按钮
-                    createSessionBtn.textContent = "已从URL加载会话";
+                    createSessionBtn.textContent = "已加载会话";
                     createSessionBtn.disabled = true;
-
-                    // 添加欢迎消息
-                    addSystemMessage(`会话已从URL加载，会话ID: ${params.session_id.substring(0, 8)}...`);
-
-                    // 获取会话的角色信息
-                    fetchSessionRoles(params.session_id);
-
-                    // 返回true表示已处理URL参数
+                    
+                    // 显示参数（如果displayParams=true）
+                    if (params.displayParams === 'true') {
+                        console.log('URL参数:', params);
+                    }
+                    
+                    // 更新当前用户名
+                    if (params.userName) {
+                        currentUserName = params.userName;
+                    }
+                    
                     return true;
                 }
 
-                // 返回false表示未处理URL参数
                 return false;
             }
 
-            // 获取会话的角色信息
+            // 修改fetchSessionRoles函数，确保正确获取角色信息
             async function fetchSessionRoles(sessionId) {
                 try {
                     // 显示加载状态
                     roleInfo.innerHTML = '<div class="text-center"><div class="spinner-border text-primary" role="status"></div><p>正在加载角色信息...</p></div>';
-
+                    
                     // 获取会话详情
                     const response = await fetch(`/api/custom-sessions/${sessionId}`);
                     if (!response.ok) {
                         throw new Error('获取会话详情失败');
                     }
-
+                    
                     const sessionData = await response.json();
                     console.log('会话详情:', sessionData);
-
+                    
                     // 检查是否有角色数据
                     if (sessionData.roles && sessionData.roles.length > 0) {
                         // 更新角色信息显示
@@ -373,13 +897,13 @@
                         roleInfo.innerHTML = `
                             <div class="alert alert-info mb-3">未找到会话关联角色，显示系统角色列表：</div>
                             ${roles.map(role => `
-                                <div class="role-info">
-                                    <strong>${role.name || '未命名角色'}</strong><br>
-                                    <small class="text-muted">角色ID: ${role._id}</small><br>
-                                    ${role.system_prompt ?
-                                        `<div class="small mt-2 text-expandable" style="max-height: 150px; overflow-y: auto; background-color: #f8f9fa; padding: 8px; border-radius: 4px; font-family: monospace;" data-content="${encodeURIComponent(role.system_prompt)}" data-title="${encodeURIComponent(role.name || '未命名角色')} 的系统提示词">${role.system_prompt}</div>`
-                                        : '<small class="text-muted">无系统提示词</small>'}
-                                </div>
+                            <div class="role-info">
+                                <strong>${role.name || '未命名角色'}</strong><br>
+                                <small class="text-muted">角色ID: ${role._id}</small><br>
+                                ${role.system_prompt ?
+                                    `<div class="small mt-2 text-expandable" style="max-height: 150px; overflow-y: auto; background-color: #f8f9fa; padding: 8px; border-radius: 4px; font-family: monospace;" data-content="${encodeURIComponent(role.system_prompt)}" data-title="${encodeURIComponent(role.name || '未命名角色')} 的系统提示词">${role.system_prompt}</div>`
+                                    : '<small class="text-muted">无系统提示词</small>'}
+                            </div>
                             `).join('')}
                         `;
                     }
@@ -389,94 +913,97 @@
                 }
             }
 
-            // 尝试处理URL参数，如果处理失败，则使用默认行为
-            const paramsProcessed = processUrlParams();
+            // 更新当前角色显示
+            function updateCurrentRoleDisplay() {
+                if (!currentRole) return;
+                
+                // 更新角色信息区域
+                const roleInfoElement = document.getElementById('roleInfo');
+                
+                if (roleInfoElement) {
+                    roleInfoElement.innerHTML = `
+                        <div class="role-info">
+                            <strong>当前角色: ${currentRole.name}</strong>
+                            <div>ID: ${currentRole.id}</div>
+                        </div>
+                    `;
+                }
+            }
 
             // 初始化，创建一个新会话
             async function createSession() {
                 try {
-                    const response = await fetch('/api/custom-sessions', {
+                    // 禁用按钮
+                    createSessionBtn.disabled = true;
+                    createSessionBtn.textContent = '创建中...';
+                    
+                    // 构造请求数据
+                    const data = {
+                        user_id: getUrlParams().userId || 'anonymous',
+                        user_name: getUrlParams().userName || '用户'
+                    };
+                    
+                    // 发送POST请求创建会话
+                    const response = await fetch('/api/sessions', {
                         method: 'POST',
                         headers: {
                             'Content-Type': 'application/json'
                         },
-                        body: JSON.stringify({
-                            class_id: "demo_class",
-                            class_name: "李飞聊天室",
-                            user_id: "67fddb75c216d02d2723a5aa",
-                            user_name: "李飞",
-                            roles: [
-                                {
-                                    role_id: "68070af12f0072ef6fa6080e",
-                                    role_name: "琴柳",
-                                    system_prompt: "你扮演琴柳（未公开种族，170cm），需体现：1) 花冠完整度对应生命体征 2) 将战场坐标转化为园艺设计图 3) 用花香浓度控制致幻等级。特别注意：收到白蔷薇触发『血色婚礼』协议（武器系统全开），被触碰耳饰启动『荆棘反刺』（自动反击且保持微笑）。所有交流必须包裹在贵族社交礼仪中。"
-                                },
-                                {
-                                    role_id: "68070af12f0072ef6fa6080d",
-                                    role_name: "玛恩纳·临光",
-                                    system_prompt: "你扮演玛恩纳（库兰塔族，186cm），需体现：1) 领带松紧度对应战力解封比例 2) 将骑士八美德转化为KPI考核标准 3) 用咖啡因代谢速度计量耐心值。特别注意：听到临光名号触发『黄昏耳鸣』（公文包溢出金光），遭遇强敌时启动『自动加班』（西装渐变为铠甲）。所有承诺必须附带违约金条款。"
-                                },
-                            ],
-                            session_type: 'two_phase_stream'
-                        })
+                        body: JSON.stringify(data)
                     });
-
+                    
                     if (!response.ok) {
-                        throw new Error('创建会话失败');
+                        throw new Error(`HTTP error! status: ${response.status}`);
                     }
-
-                    const data = await response.json();
-                    currentSessionId = data.session_id;
-                    currentUserName = "李飞"; // 设置用户名为创建会话时使用的名称
-                    console.log('会话已创建:', currentSessionId);
-
-                    // 更新界面
-                    sessionInfo.innerHTML = `
-                        <strong>会话ID:</strong> ${currentSessionId}<br>
-                        <strong>用户:</strong> 李飞<br>
-                        <strong>会话类型:</strong> 两阶段流式API
-                    `;
-
-                    // 显示角色信息
-                    roleInfo.innerHTML = data.roles.map(role => `
-                        <div class="role-info">
-                            <strong>${role.role_name}</strong><br>
-                            ${role.system_prompt.substring(0, 100)}...
-                        </div>
-                    `).join('');
-
-                    createSessionBtn.textContent = "已创建会话";
-                    createSessionBtn.disabled = true;
-
-                    // 添加欢迎消息
-                    addSystemMessage("会话已创建，请发送消息开始对话！");
-
+                    
+                    const result = await response.json();
+                    
+                    // 更新会话信息
+                    currentSessionId = result.session_id;
+                    document.getElementById('sessionInfo').textContent = `会话ID: ${currentSessionId}`;
+                    
+                    // 显示成功提示
+                    showToast('会话创建成功');
+                    
+                    // 加载会话角色
+                    fetchSessionRoles(currentSessionId);
+                    
                 } catch (error) {
-                    showError('创建会话失败: ' + error.message);
+                    console.error('创建会话失败:', error);
+                    handleError(`创建会话失败: ${error.message}`);
+                    
+                    // 重置按钮状态
+                    createSessionBtn.disabled = false;
+                    createSessionBtn.textContent = '创建会话';
                 }
             }
 
             // 显示用户消息
-            function addUserMessage(content) {
+            function addUserMessage(message) {
+                if (!message) return;
+                
+                // 创建消息容器
                 const messageContainer = document.createElement('div');
                 messageContainer.className = 'message-container user-container';
-
-                // 添加用户名标签
-                const userLabel = document.createElement('small');
-                userLabel.style.marginLeft = '10px'; // 改为左边距，因为是反向排列
-                userLabel.style.color = '#0066cc';
-                userLabel.style.fontWeight = 'bold';
-                userLabel.style.paddingTop = '0px'; // 移除顶部内边距，确保与消息文本顶部对齐
-                userLabel.style.alignSelf = 'flex-start'; // 确保顶部对齐
-                userLabel.textContent = `${currentUserName}: `;
-                messageContainer.appendChild(userLabel);
-
+                
+                // 创建消息元素
                 const messageElement = document.createElement('div');
                 messageElement.className = 'message user-message';
-                messageElement.textContent = content;
-
+                messageElement.textContent = message;
+                
+                // 创建用户名标签
+                const userNameLabel = document.createElement('div');
+                userNameLabel.className = 'user-name-label';
+                userNameLabel.textContent = currentUserName || '用户';
+                
+                // 将消息和用户名添加到容器
                 messageContainer.appendChild(messageElement);
+                messageContainer.appendChild(userNameLabel);
+                
+                // 将容器添加到聊天区域
                 chatContainer.appendChild(messageContainer);
+                
+                // 滚动到最新消息
                 chatContainer.scrollTop = chatContainer.scrollHeight;
             }
 
@@ -514,7 +1041,7 @@
 
                 const messageElement = document.createElement('span');
                 messageElement.className = 'badge bg-secondary';
-                messageElement.textContent = content;
+                messageElement.innerHTML = content; // 使用innerHTML而不是textContent以支持HTML
 
                 messageContainer.appendChild(messageElement);
                 chatContainer.appendChild(messageContainer);
@@ -530,272 +1057,374 @@
                 }, 5000);
             }
 
-            // 发送用户消息
+            // 修改sendMessage函数，确保连接在响应完成后彻底关闭
             async function sendMessage() {
                 const message = userInput.value.trim();
                 if (!message) return;
-
+                
+                // 检查是否有会话ID
                 if (!currentSessionId) {
-                    await createSession();
+                    handleError('请先创建会话或从URL加载会话');
+                    return;
                 }
-
-                addUserMessage(message);
-                userInput.value = '';
-
-                // 显示正在输入指示器
-                typingIndicator.style.display = 'inline-block';
+                
+                // 防止重复发送：检查是否正在处理消息
+                if (isProcessingMessage) {
+                    console.log('消息正在处理中，请稍候...');
+                    return;
+                }
+                
+                // 防止频繁发送：检查与上一条消息的时间间隔(至少1秒)
+                const now = Date.now();
+                if (now - lastSentTime < 1000) {
+                    console.log('发送过于频繁，请稍候再试...');
+                    return;
+                }
+                
+                // 防止重复内容：检查是否与上一条消息内容相同
+                if (message === lastSentMessage) {
+                    console.log('请勿重复发送相同内容');
+                    return;
+                }
+                
+                // 更新状态
+                isProcessingMessage = true;
+                lastSentMessage = message;
+                lastSentTime = now;
+                
+                // 重置对话状态 - 清除之前的思考和响应容器ID
+                const oldThinking = document.getElementById('thinkingContainer');
+                if (oldThinking) {
+                    oldThinking.id = 'completed-thinking-' + Date.now();
+                }
+                
+                const oldResponse = document.getElementById('responseContainer');
+                if (oldResponse) {
+                    oldResponse.id = 'completed-response-' + Date.now();
+                }
+                
+                // 禁用发送按钮并显示加载指示器
                 sendBtn.disabled = true;
-
-                // 关闭之前的EventSource连接
-                if (currentEventSource) {
-                    currentEventSource.close();
-                    currentEventSource = null;
-                }
-
-                // 创建消息容器，后续会更新内容
-                const messagePlaceholder = addAssistantMessage("", "AI");
-
-                // 创建角色信息容器
-                const roleInfoElement = document.createElement('div');
-                roleInfoElement.className = 'role-info';
-                roleInfoElement.style.display = 'none';
-                chatContainer.appendChild(roleInfoElement);
-
+                typingIndicator.style.display = 'block';
+                
+                // 显示用户消息
+                addUserMessage(message);
+                
+                // 清空输入框
+                userInput.value = '';
+                
+                // 保存用户消息
+                lastUserMessage = message;
+                
                 try {
-                    // 获取选择的API端点
-                    const selectedEndpoint = apiEndpoint.value;
-                    console.log('使用API端点:', selectedEndpoint);
-
-                    let url = '';
-
-                    // 根据不同的API端点构建不同的URL
-                    if (selectedEndpoint === '/api/two-phase-stream/generate' || selectedEndpoint === '/api/two-phase/generate') {
-                        // 使用查询参数格式
-                        url = `${selectedEndpoint}?session_id=${encodeURIComponent(currentSessionId)}&message=${encodeURIComponent(message)}`;
+                    // 构建请求URL
+                    const endpointURL = apiEndpoint.value;
+                    const url = new URL(window.location.origin + endpointURL);
+                    
+                    // 添加参数
+                    url.searchParams.append('session_id', currentSessionId);
+                    url.searchParams.append('message', message);
+                    
+                    // 添加显示思考过程参数
+                    const showThinkingCheckbox = document.getElementById('showThinking');
+                    if (showThinkingCheckbox && showThinkingCheckbox.checked) {
+                        url.searchParams.append('show_thinking', 'true');
+                    } else {
+                        url.searchParams.append('show_thinking', 'false');
                     }
-                    else if (selectedEndpoint === '/api/llm/chatrag' || selectedEndpoint === '/api/llm/chat') {
-                        // 这些API通常使用POST请求，但我们这里使用GET请求进行流式响应
-                        // 添加必要的参数
-                        url = `${selectedEndpoint}?session_id=${encodeURIComponent(currentSessionId)}&stream=true`;
-
-                        // 添加消息内容
-                        const params = new URLSearchParams();
-                        params.append('content', message);
-                        url += '&' + params.toString();
+                    
+                    // 添加时间戳防止缓存
+                    url.searchParams.append('_t', Date.now());
+                    
+                    // 关闭之前的事件源并设置为null
+                    if (currentEventSource) {
+                        console.log('关闭之前的EventSource连接');
+                        currentEventSource.close();
+                        currentEventSource = null;
                     }
-                    else {
-                        // 默认格式
-                        url = `${selectedEndpoint}?session_id=${encodeURIComponent(currentSessionId)}&message=${encodeURIComponent(message)}`;
-                    }
-
-                    console.log('请求URL:', url);
-
-                    // 使用EventSource接收流式响应
-                    const eventSource = new EventSource(url);
+                    
+                    // 创建EventSource连接，但添加更多控制
+                    console.log('Opening SSE connection to:', url.toString());
+                    const eventSource = new EventSource(url.toString());
                     currentEventSource = eventSource;
-
-                    // 存储流式响应的内容
-                    let responseText = '';
-
+                    
+                    // 添加连接打开事件处理
+                    eventSource.onopen = function() {
+                        console.log('EventSource连接已打开');
+                    };
+                    
+                    // 设置onmessage处理程序
                     eventSource.onmessage = function(event) {
                         try {
                             const data = JSON.parse(event.data);
-                            console.log('接收到事件:', data);
-
-                            // 获取当前选择的API端点
-                            const selectedEndpoint = apiEndpoint.value;
-
-                            // 根据不同的API端点处理不同格式的数据
-                            if (selectedEndpoint === '/api/two-phase-stream/generate') {
-                                // 原始两阶段流式API的处理逻辑
-
-                                // 处理匹配信息
-                                if (data.type === 'match_info') {
-                                    lastMessageId = data.message_id;
-                                    roleInfoElement.style.display = 'block';
-                                    roleInfoElement.innerHTML = `
-                                        <strong>选中角色:</strong> ${data.selected_role}<br>
-                                        <strong>匹配分数:</strong> ${(data.match_score * 100).toFixed(1)}%<br>
-                                        <strong>匹配原因:</strong> ${data.match_reason}
-                                    `;
-                                    messagePlaceholder.parentElement.querySelector('small').textContent = `${data.selected_role}: `;
-                                }
-
-                                // 处理内容片段
-                                else if (data.type === 'content') {
-                                    responseText += data.content;
-                                    messagePlaceholder.textContent = responseText;
-                                    chatContainer.scrollTop = chatContainer.scrollHeight;
-                                }
-
-                                // 处理完成信号
-                                else if (data.type === 'complete') {
-                                    // 关闭连接
-                                    eventSource.close();
-                                    currentEventSource = null;
-
-                                    // 隐藏正在输入指示器
-                                    typingIndicator.style.display = 'none';
-                                    sendBtn.disabled = false;
-                                }
-
-                                // 处理错误
-                                else if (data.type === 'error') {
-                                    showError('生成响应时出错: ' + data.message);
-                                    eventSource.close();
-                                    currentEventSource = null;
-                                    typingIndicator.style.display = 'none';
-                                    sendBtn.disabled = false;
-                                }
-                            }
-                            else if (selectedEndpoint === '/api/two-phase/generate') {
-                                // 新的two-phase API处理逻辑
-                                // 假设格式与原始API类似
-
-                                if (data.type === 'match_info' || data.type === 'role_info') {
-                                    lastMessageId = data.message_id || '';
-                                    roleInfoElement.style.display = 'block';
-                                    roleInfoElement.innerHTML = `
-                                        <strong>选中角色:</strong> ${data.selected_role || data.role_name || '未知角色'}<br>
-                                        <strong>匹配分数:</strong> ${data.match_score ? (data.match_score * 100).toFixed(1) + '%' : '未知'}<br>
-                                        <strong>匹配原因:</strong> ${data.match_reason || data.reason || '未提供'}
-                                    `;
-
-                                    const roleName = data.selected_role || data.role_name || 'AI';
-                                    if (messagePlaceholder.parentElement.querySelector('small')) {
-                                        messagePlaceholder.parentElement.querySelector('small').textContent = `${roleName}: `;
-                                    }
-                                }
-
-                                else if (data.type === 'content' || data.content || data.delta) {
-                                    const contentChunk = data.content || data.delta || '';
-                                    responseText += contentChunk;
-                                    messagePlaceholder.textContent = responseText;
-                                    chatContainer.scrollTop = chatContainer.scrollHeight;
-                                }
-
-                                else if (data.type === 'complete' || data.done === true) {
-                                    eventSource.close();
-                                    currentEventSource = null;
-                                    typingIndicator.style.display = 'none';
-                                    sendBtn.disabled = false;
-                                }
-
-                                else if (data.type === 'error' || data.error) {
-                                    showError('生成响应时出错: ' + (data.message || data.error || '未知错误'));
-                                    eventSource.close();
-                                    currentEventSource = null;
-                                    typingIndicator.style.display = 'none';
-                                    sendBtn.disabled = false;
-                                }
-                            }
-                            else if (selectedEndpoint === '/api/llm/chatrag' || selectedEndpoint === '/api/llm/chat') {
-                                // 处理标准聊天API和RAG增强聊天API的响应
-                                // 这些API通常返回增量内容
-
-                                if (data.choices && data.choices.length > 0) {
-                                    const choice = data.choices[0];
-
-                                    if (choice.delta && choice.delta.content) {
-                                        responseText += choice.delta.content;
-                                        messagePlaceholder.textContent = responseText;
-                                        chatContainer.scrollTop = chatContainer.scrollHeight;
-                                    }
-
-                                    if (choice.finish_reason === 'stop') {
-                                        eventSource.close();
-                                        currentEventSource = null;
-                                        typingIndicator.style.display = 'none';
-                                        sendBtn.disabled = false;
-                                    }
-                                }
-                                else if (data.error) {
-                                    showError('生成响应时出错: ' + data.error.message);
-                                    eventSource.close();
-                                    currentEventSource = null;
-                                    typingIndicator.style.display = 'none';
-                                    sendBtn.disabled = false;
-                                }
-                                // 处理纯文本响应
-                                else if (typeof data === 'string' || data.content) {
-                                    const content = typeof data === 'string' ? data : (data.content || '');
-                                    responseText += content;
-                                    messagePlaceholder.textContent = responseText;
-                                    chatContainer.scrollTop = chatContainer.scrollHeight;
-                                }
-                            }
-                            else {
-                                // 通用处理逻辑，尝试提取内容
-                                console.log('使用通用处理逻辑处理响应');
-
-                                // 尝试提取内容
-                                let content = '';
-                                if (data.content) {
-                                    content = data.content;
-                                } else if (data.choices && data.choices.length > 0) {
-                                    content = data.choices[0].delta?.content || data.choices[0].message?.content || '';
-                                } else if (typeof data === 'string') {
-                                    content = data;
-                                }
-
-                                if (content) {
-                                    responseText += content;
-                                    messagePlaceholder.textContent = responseText;
-                                    chatContainer.scrollTop = chatContainer.scrollHeight;
-                                }
-
-                                // 检查是否完成
-                                const isDone = data.done || data.type === 'complete' ||
-                                             (data.choices && data.choices[0]?.finish_reason === 'stop');
-
-                                if (isDone) {
-                                    eventSource.close();
-                                    currentEventSource = null;
-                                    typingIndicator.style.display = 'none';
-                                    sendBtn.disabled = false;
-                                }
-                            }
+                            processEvent(data);
                         } catch (e) {
-                            console.error('解析事件数据时出错:', e, event.data);
-                            // 尝试直接显示原始数据
-                            try {
-                                responseText += event.data;
-                                messagePlaceholder.textContent = responseText;
-                                chatContainer.scrollTop = chatContainer.scrollHeight;
-                            } catch (displayError) {
-                                console.error('显示原始数据时出错:', displayError);
-                            }
+                            console.error('处理消息时出错:', e, event.data);
+                            handleError('处理响应时出错: ' + e.message);
+                            
+                            // 确保连接关闭
+                            closeEventSource();
+                            isProcessingMessage = false;
                         }
                     };
-
-                    eventSource.onerror = function(error) {
-                        console.error('EventSource错误:', error);
-                        eventSource.close();
-                        currentEventSource = null;
-                        typingIndicator.style.display = 'none';
-                        sendBtn.disabled = false;
-
-                        if (responseText.length === 0) {
-                            showError('连接中断或请求失败');
-                        }
+                    
+                    // 设置onerror处理程序，确保连接出错时彻底关闭
+                    eventSource.onerror = function(event) {
+                        console.error('EventSource连接错误:', event);
+                        handleError('连接错误，请刷新页面重试');
+                        
+                        // 确保连接关闭
+                        closeEventSource();
+                        isProcessingMessage = false;
                     };
-
                 } catch (error) {
-                    showError('发送消息失败: ' + error.message);
+                    console.error('发送消息时出错:', error);
+                    handleError('发送消息时出错: ' + error.message);
+                    
+                    // 恢复状态
+                    typingIndicator.style.display = 'none';
+                    sendBtn.disabled = false;
+                    isProcessingMessage = false;
+                }
+            }
+
+            // 添加一个专门的函数用于关闭EventSource连接，确保彻底关闭
+            function closeEventSource() {
+                if (currentEventSource) {
+                    console.log('关闭EventSource连接');
+                    
+                    // 移除所有事件监听器
+                    currentEventSource.onmessage = null;
+                    currentEventSource.onerror = null;
+                    currentEventSource.onopen = null;
+                    
+                    // 关闭连接
+                    currentEventSource.close();
+                    currentEventSource = null;
+                    
+                    // 恢复UI状态
                     typingIndicator.style.display = 'none';
                     sendBtn.disabled = false;
                 }
             }
 
-            // 清空聊天记录
-            function clearChat() {
-                chatContainer.innerHTML = '';
-                lastMessageId = null;
-
-                // 如果创建了会话，添加重置消息
-                if (currentSessionId) {
-                    addSystemMessage("聊天记录已清空");
+            function processEvent(data) {
+                console.log('Processing event:', data);
+                
+                // 检查data本身是否包含type字段
+                if (data.type) {
+                    switch (data.type) {
+                        case 'thinking_start':
+                            processThinkingStart(data);
+                            break;
+                        case 'thinking_content':
+                            processThinkingContent(data);
+                            break;
+                        case 'thinking_reference':
+                            processThinkingReference(data);
+                            break;
+                        case 'thinking_end':
+                            processThinkingEnd(data);
+                            break;
+                        case 'thinking_error':
+                            processThinkingError(data);
+                            break;
+                        case 'content':
+                            processResponseContent(data);
+                            break;
+                        case 'complete':
+                            finalizeResponse(data);
+                            break;
+                        case 'match_info':
+                            handleMatchInfo(data);
+                            break;
+                        case 'error':
+                            handleError(data.message || '未知错误');
+                            break;
+                        default:
+                            console.warn('Unknown event type:', data.type);
+                    }
+                } else if (data.event) {
+                    // 向后兼容：旧格式事件可能使用event字段而不是type字段
+                    switch (data.event) {
+                        case 'thinking_start':
+                            processThinkingStart(data);
+                            break;
+                        case 'thinking_content':
+                            processThinkingContent(data);
+                            break;
+                        case 'thinking_reference':
+                            processThinkingReference(data);
+                            break;
+                        case 'thinking_end':
+                            processThinkingEnd(data);
+                            break;
+                        case 'thinking_error':
+                            processThinkingError(data);
+                            break;
+                        case 'content':
+                            processResponseContent(data);
+                            break;
+                        case 'done':
+                            finalizeResponse(data);
+                            break;
+                        case 'match_info':
+                            handleMatchInfo(data);
+                            break;
+                        case 'error':
+                            handleError(data.message || '未知错误');
+                            break;
+                        default:
+                            console.warn('Unknown event format:', data);
+                    }
+                } else {
+                    console.warn('Unrecognized event format:', data);
                 }
+            }
+
+            function processThinkingStart(data) {
+                console.log('Thinking start:', data);
+                
+                // 创建思考容器
+                if (!document.getElementById('thinkingContainer')) {
+                    // 使用角色名称构建思考原因
+                    const reason = currentRole && currentRole.name 
+                        ? `${currentRole.name}思考中...` 
+                        : (data.reason || '思考中...');
+                        
+                    const container = createThinkingContainer(reason);
+                    chatContainer.appendChild(container);
+                }
+                
+                // 滚动到最新内容
+                chatContainer.scrollTop = chatContainer.scrollHeight;
+            }
+
+            function processThinkingContent(data) {
+                console.log('Thinking content:', data);
+                
+                // 添加思考步骤，带有打字机效果
+                appendThinkingStep(data.content);
+            }
+
+            function processThinkingReference(data) {
+                console.log('Thinking reference:', data);
+                
+                const thinkingContainer = document.getElementById('thinkingContainer');
+                if (!thinkingContainer) {
+                    // 如果没有思考容器，创建一个
+                    const container = createThinkingContainer('参考文档');
+                    chatContainer.appendChild(container);
+                }
+                
+                appendReferenceCard(
+                    data.title || 'Document',
+                    data.content || '',
+                    data.relevance || '0'
+                );
+            }
+
+            function processThinkingEnd(data) {
+                console.log('Thinking end:', data);
+                
+                const thinkingContainer = document.getElementById('thinkingContainer');
+                if (!thinkingContainer) {
+                    return; // 如果没有思考容器，直接返回
+                }
+                
+                // 完成思考容器
+                finalizeThinkingContainer(data.docs_count || 0, data.time_taken || 0);
+            }
+
+            function processThinkingError(data) {
+                console.log('Thinking error:', data);
+                
+                // 获取或创建思考容器
+                let thinkingContainer = document.getElementById('thinkingContainer');
+                if (!thinkingContainer) {
+                    thinkingContainer = createThinkingContainer('检索过程出错');
+                    chatContainer.appendChild(thinkingContainer);
+                }
+                
+                // 添加错误信息
+                appendThinkingError(data.error || data.message || '发生未知错误');
+            }
+
+            function processResponseContent(data) {
+                console.log('Response content:', data);
+                
+                // 获取或创建响应容器
+                let responseContainer = document.getElementById('responseContainer');
+                if (!responseContainer) {
+                    // 如果有思考容器，确保有分隔线
+                    if (document.getElementById('thinkingContainer')) {
+                        // 检查是否已存在分隔线
+                        if (!document.querySelector('.thinking-response-divider')) {
+                            const divider = document.createElement('div');
+                            divider.className = 'thinking-response-divider';
+                            divider.setAttribute('data-role-name', currentRole ? currentRole.name : '助手');
+                            chatContainer.appendChild(divider);
+                        }
+                    }
+                    
+                    // 创建响应容器
+                    responseContainer = createResponseContainer();
+                    chatContainer.appendChild(responseContainer);
+                }
+                
+                // 添加内容，无需打字机效果
+                appendResponseContent(data.content || '');
+            }
+
+            function finalizeResponse(data) {
+                console.log('Response complete:', data);
+                
+                // 获取响应容器
+                const responseContainer = document.getElementById('responseContainer');
+                if (responseContainer) {
+                    // 完成响应容器
+                    finalizeResponseContainer();
+                    
+                    // 移除容器ID，以便下次对话创建新的容器
+                    responseContainer.id = 'completed-response-' + Date.now();
+                }
+                
+                // 获取思考容器
+                const thinkingContainer = document.getElementById('thinkingContainer');
+                if (thinkingContainer) {
+                    // 移除容器ID，以便下次对话创建新的容器
+                    thinkingContainer.id = 'completed-thinking-' + Date.now();
+                }
+                
+                // 确保彻底关闭连接
+                closeEventSource();
+                
+                // 重置状态
+                isProcessingMessage = false;
+                
+                // 滚动到底部
+                chatContainer.scrollTop = chatContainer.scrollHeight;
+            }
+
+            // Function to show a toast notification
+            function showToast(message, duration = 3000) {
+                // Create toast element if it doesn't exist
+                let toast = document.getElementById('toast');
+                if (!toast) {
+                    toast = document.createElement('div');
+                    toast.id = 'toast';
+                    toast.className = 'toast';
+                    document.body.appendChild(toast);
+                }
+                
+                // Set message and show toast
+                toast.textContent = message;
+                toast.classList.add('show');
+                
+                // Hide toast after duration
+                setTimeout(() => {
+                    toast.classList.remove('show');
+                }, duration);
             }
 
             // 文本弹窗功能
@@ -803,44 +1432,57 @@
             const textModalBody = document.getElementById('textModalBody');
             const textModalTitle = document.querySelector('.text-modal-title');
             const textModalClose = document.querySelector('.text-modal-close');
+            const textModalCloseBtn = document.getElementById('textModalCloseBtn');
 
-            // 关闭弹窗
-            textModalClose.addEventListener('click', () => {
+            // 关闭弹窗函数
+            function closeTextModal() {
                 textModal.style.display = 'none';
-            });
+                document.body.style.overflow = 'auto'; // 恢复body滚动
+            }
+
+            // 关闭按钮点击事件
+            textModalClose.addEventListener('click', closeTextModal);
+            textModalCloseBtn.addEventListener('click', closeTextModal);
 
             // 点击弹窗外部关闭弹窗
             window.addEventListener('click', (e) => {
                 if (e.target === textModal) {
-                    textModal.style.display = 'none';
+                    closeTextModal();
                 }
             });
 
-            // 为可展开文本添加双击事件委托
-            document.addEventListener('dblclick', (e) => {
-                const target = e.target.closest('.text-expandable');
-                if (target) {
-                    // 获取URL编码的内容和标题
-                    const encodedContent = target.getAttribute('data-content');
-                    const encodedTitle = target.getAttribute('data-title') || '详细内容';
-
-                    // 解码内容和标题
-                    const content = decodeURIComponent(encodedContent);
-                    const title = decodeURIComponent(encodedTitle) + ' 的系统提示词';
-
-                    // 设置标题
-                    textModalTitle.textContent = title;
-
-                    // 设置内容 - 使用textContent确保HTML特殊字符正确显示
-                    textModalBody.textContent = content;
-
-                    // 显示弹窗
-                    textModal.style.display = 'flex';
-
-                    // 确保弹窗内容区域滚动到顶部
-                    textModalBody.scrollTop = 0;
+            // 显示详细内容弹窗
+            function showDetailModal(title, content, isCode = false) {
+                textModalTitle.textContent = title || '详细内容';
+                
+                // 清空之前的内容
+                textModalBody.innerHTML = '';
+                
+                // 处理内容显示方式
+                if (isCode) {
+                    // 如果是代码，使用pre和code标签包装
+                    const pre = document.createElement('pre');
+                    const code = document.createElement('code');
+                    code.textContent = content || '无内容';
+                    pre.appendChild(code);
+                    textModalBody.appendChild(pre);
+                    
+                    // 如果有highlight.js，应用语法高亮
+                    if (window.hljs) {
+                        window.hljs.highlightElement(code);
+                    }
+                } else {
+                    // 普通文本
+                    textModalBody.textContent = content || '无内容';
                 }
-            });
+                
+                // 显示弹窗
+                textModal.style.display = 'block';
+                document.body.style.overflow = 'hidden'; // 防止背景滚动
+                
+                // 滚动到顶部
+                textModalBody.scrollTop = 0;
+            }
 
             // 事件监听
             sendBtn.addEventListener('click', sendMessage);
@@ -853,7 +1495,475 @@
             });
 
             createSessionBtn.addEventListener('click', createSession);
-            clearChatBtn.addEventListener('click', clearChat);
+            clearChatBtn.addEventListener('click', () => {
+                // 清空聊天容器
+                chatContainer.innerHTML = '';
+                // 显示提示
+                showToast('聊天记录已清空');
+            });
+
+            // 通用事件处理函数
+            function handleEvent(event) {
+                try {
+                    const data = JSON.parse(event.data);
+                    if (!data || !data.type) {
+                        console.warn('Received event without type:', data);
+                        return;
+                    }
+
+                    console.log('Handling event type:', data.type, data);
+
+                    switch (data.type) {
+                        case 'thinking_mode':
+                            isThinkingMode = data.value === true;
+                            break;
+                        case 'match_info':
+                            handleMatchInfo(data);
+                            break;
+                        case 'content':
+                            handleContentChunk(data.content);
+                            break;
+                        case 'complete':
+                            handleComplete();
+                            break;
+                        case 'error':
+                            handleError(data.message || '未知错误');
+                            break;
+                        default:
+                            console.warn('Unknown event type:', data.type);
+                    }
+                } catch (e) {
+                    console.error('Error handling event:', e, event);
+                }
+            }
+
+            // 修改handleMatchInfo函数，防止重复添加角色匹配信息
+            function handleMatchInfo(data) {
+                console.log('匹配信息:', data);
+                
+                if (!data.role && !data.selected_role) {
+                    console.warn('无角色信息:', data);
+                    return;
+                }
+                
+                // 更新当前角色信息
+                const roleData = data.role || {};
+                const roleName = data.selected_role || roleData.name || roleData.role_name || '未知角色';
+                
+                currentRole = {
+                    id: roleData.id || roleData.role_id || data.role_id || '未知',
+                    name: roleName,
+                    avatar: roleData.avatar || null
+                };
+                
+                // 创建或获取思考容器
+                let thinkingContainer = document.getElementById('thinkingContainer');
+                if (!thinkingContainer) {
+                    thinkingContainer = createThinkingContainer(`${roleName} 思考中...`);
+                    chatContainer.appendChild(thinkingContainer);
+                }
+                
+                // 检查思考容器中是否已存在匹配信息区域
+                const existingMatchInfo = thinkingContainer.querySelector('.match-info-area');
+                if (existingMatchInfo) {
+                    // 如果已存在匹配信息区域，则更新其内容而不是创建新的
+                    existingMatchInfo.remove();
+                }
+                
+                // 创建匹配信息区域
+                const matchInfoArea = document.createElement('div');
+                matchInfoArea.className = 'match-info-area';
+                
+                // 添加标题
+                const matchInfoTitle = document.createElement('div');
+                matchInfoTitle.className = 'match-info-title';
+                matchInfoTitle.textContent = '角色匹配信息';
+                matchInfoArea.appendChild(matchInfoTitle);
+                
+                // 添加角色名
+                const roleItem = document.createElement('div');
+                roleItem.className = 'match-info-item';
+                roleItem.innerHTML = `已匹配到角色: <span class="match-role-name">${roleName}</span>`;
+                matchInfoArea.appendChild(roleItem);
+                
+                // 添加匹配分数（如果有）
+                if (data.match_score) {
+                    const matchScore = parseFloat(data.match_score).toFixed(2);
+                    const scoreItem = document.createElement('div');
+                    scoreItem.className = 'match-info-item';
+                    scoreItem.innerHTML = `匹配度: <span class="match-score">${matchScore}</span>`;
+                    matchInfoArea.appendChild(scoreItem);
+                }
+                
+                // 添加匹配原因（如果有）
+                if (data.match_reason && data.match_reason.length > 0) {
+                    const reasonItem = document.createElement('div');
+                    reasonItem.className = 'match-info-item';
+                    reasonItem.innerHTML = `匹配原因: <span class="match-reason">${data.match_reason}</span>`;
+                    matchInfoArea.appendChild(reasonItem);
+                }
+                
+                // 将匹配信息添加到思考容器的内容区域
+                const thinkingContent = thinkingContainer.querySelector('.thinking-content');
+                if (thinkingContent) {
+                    thinkingContent.appendChild(matchInfoArea);
+                }
+                
+                // 更新UI中的角色信息
+                updateCurrentRoleDisplay();
+            }
+
+            // 更新当前角色的显示
+            function updateCurrentRoleDisplay() {
+                if (!currentRole) return;
+                
+                // 如果界面中有显示当前角色的元素，则更新
+                const roleDisplay = document.getElementById('current-role-info');
+                if (roleDisplay) {
+                    roleDisplay.innerHTML = `当前角色: ${currentRole.name} (ID: ${currentRole.id})`;
+                    
+                    const avatarEl = document.getElementById('current-role-avatar');
+                    if (avatarEl && currentRole.avatar) {
+                        avatarEl.src = currentRole.avatar;
+                        avatarEl.style.display = 'inline-block';
+                    }
+                }
+            }
+
+            function handleContentChunk(content) {
+                if (!content) return;
+                
+                // 如果还没有创建响应容器，先创建一个
+                if (!responseContainer) {
+                    responseContainer = createResponseContainer();
+                    chatContainer.appendChild(responseContainer);
+                }
+                
+                appendResponseContent(content);
+            }
+
+            function handleComplete() {
+                console.log('响应完成');
+                
+                // 关闭事件源
+                if (currentEventSource) {
+                    currentEventSource.close();
+                    currentEventSource = null;
+                }
+                
+                // 启用输入
+                typingIndicator.style.display = 'none';
+                sendBtn.disabled = false;
+                
+                // 滚动到底部
+                chatContainer.scrollTop = chatContainer.scrollHeight;
+            }
+
+            // 错误处理函数
+            function handleError(errorMsg) {
+                console.error('Error:', errorMsg);
+                
+                // 显示错误容器
+                errorContainer.style.display = 'block';
+                errorMessage.textContent = errorMsg;
+                
+                // 3秒后自动隐藏错误信息
+                setTimeout(() => {
+                    errorContainer.style.display = 'none';
+                }, 5000);
+                
+                // 恢复界面状态
+                if (typingIndicator) {
+                    typingIndicator.style.display = 'none';
+                }
+                
+                if (sendBtn) {
+                    sendBtn.disabled = false;
+                }
+                
+                // 关闭当前事件源
+                if (currentEventSource) {
+                    currentEventSource.close();
+                    currentEventSource = null;
+                }
+            }
+
+            // Create a thinking container
+            function createThinkingContainer(reason) {
+                // 检查是否已存在思考容器，如果存在则直接返回
+                let container = document.getElementById('thinkingContainer');
+                if (container) {
+                    return container;
+                }
+                
+                // 创建新的思考容器
+                container = document.createElement('div');
+                container.id = 'thinkingContainer';
+                container.className = 'thinking-container';
+                
+                // 创建标题区域
+                const header = document.createElement('div');
+                header.className = 'thinking-header';
+                
+                // 添加标题
+                const title = document.createElement('div');
+                title.className = 'thinking-title';
+                title.innerHTML = '<i class="fas fa-brain"></i> 思考过程';
+                header.appendChild(title);
+                
+                // 添加原因（如有）
+                if (reason) {
+                    const reasonElem = document.createElement('div');
+                    reasonElem.className = 'thinking-reason';
+                    reasonElem.textContent = reason;
+                    header.appendChild(reasonElem);
+                }
+                
+                // 添加切换按钮
+                const toggleBtn = document.createElement('button');
+                toggleBtn.className = 'thinking-toggle';
+                toggleBtn.innerHTML = '<i class="fas fa-chevron-up"></i>';
+                toggleBtn.onclick = function() {
+                    // 切换内容区域显示
+                    const content = container.querySelector('.thinking-content');
+                    const references = container.querySelector('.thinking-references');
+                    
+                    // 检查当前状态
+                    const isExpanded = content.style.display !== 'none';
+                    
+                    if (isExpanded) {
+                        // 收起内容
+                        content.style.display = 'none';
+                        if (references) references.style.display = 'none';
+                        toggleBtn.innerHTML = '<i class="fas fa-chevron-down"></i>';
+                    } else {
+                        // 展开内容
+                        content.style.display = 'block';
+                        if (references) references.style.display = 'block';
+                        toggleBtn.innerHTML = '<i class="fas fa-chevron-up"></i>';
+                    }
+                };
+                header.appendChild(toggleBtn);
+                
+                // 将标题区域添加到容器
+                container.appendChild(header);
+                
+                // 创建内容区域
+                const content = document.createElement('div');
+                content.className = 'thinking-content';
+                container.appendChild(content);
+                
+                return container;
+            }
+
+            // 完成思考容器的函数
+            function finalizeThinkingContainer(docsCount, timeTaken) {
+                const container = document.getElementById('thinkingContainer');
+                if (!container) return;
+                
+                // 检查是否已有总结区域
+                if (container.querySelector('.thinking-summary')) return;
+                
+                // 创建总结区域
+                const summary = document.createElement('div');
+                summary.className = 'thinking-summary';
+                
+                // 格式化时间（将毫秒转换为秒，保留两位小数）
+                const timeInSeconds = timeTaken / 1000;
+                const formattedTime = timeInSeconds.toFixed(2);
+                
+                // 设置总结文本
+                summary.innerHTML = `
+                    <div><i class="fas fa-search"></i> 找到 <strong>${docsCount || 0}</strong> 个相关文档</div>
+                    <div><i class="fas fa-clock"></i> 耗时 <strong>${formattedTime}</strong> 秒</div>
+                `;
+                
+                // 添加总结区域到容器
+                container.appendChild(summary);
+                
+                // 创建分隔线，显示角色回答分隔
+                const divider = document.createElement('div');
+                divider.className = 'thinking-response-divider';
+                divider.setAttribute('data-role-name', currentRole ? currentRole.name : '助手');
+                chatContainer.appendChild(divider);
+            }
+
+            // 添加思考错误的函数
+            function appendThinkingError(error) {
+                if (!error) return;
+                
+                const thinkingContainer = document.getElementById('thinkingContainer');
+                if (!thinkingContainer) return;
+                
+                // 创建错误区域
+                const errorElem = document.createElement('div');
+                errorElem.className = 'thinking-error';
+                errorElem.innerHTML = `<i class="fas fa-exclamation-triangle"></i> ${error}`;
+                
+                // 添加到思考容器
+                thinkingContainer.appendChild(errorElem);
+                
+                // 滚动到最新内容
+                chatContainer.scrollTop = chatContainer.scrollHeight;
+            }
+
+            // 显示详情模态框的函数
+            function showModal(title, content) {
+                // 如果已经有modal函数，使用它
+                if (typeof showDetailModal === 'function') {
+                    showDetailModal(title, content);
+                    return;
+                }
+                
+                // 否则使用alert作为备用
+                alert(`${title}\n\n${content}`);
+            }
+
+            // 将这些函数添加回来
+            // 修改appendResponseContent函数，确保正确追加内容而不是覆盖
+            function appendResponseContent(text) {
+                if (!text) return;
+                
+                const responseContainer = document.getElementById('responseContainer');
+                if (!responseContainer) return;
+                
+                const content = responseContainer.querySelector('.response-content');
+                
+                // 获取当前内容
+                let currentHTML = content.innerHTML || '';
+                let fullContent = '';
+                
+                // 如果当前内容为空或只包含加载指示器的类，直接设置新内容
+                if (!currentHTML || currentHTML.trim() === '') {
+                    fullContent = text;
+                } else {
+                    // 解析现有内容，提取纯文本
+                    const tempDiv = document.createElement('div');
+                    tempDiv.innerHTML = currentHTML;
+                    const existingText = tempDiv.textContent || '';
+                    
+                    // 合并现有内容和新内容
+                    fullContent = existingText + text;
+                }
+                
+                // 使用markdown-it渲染内容（如果可用）
+                if (window.markdownit) {
+                    const md = window.markdownit({
+                        html: true,
+                        linkify: true,
+                        typographer: true,
+                        highlight: function (str, lang) {
+                            if (lang && hljs.getLanguage(lang)) {
+                                try {
+                                    return '<pre class="hljs"><code>' +
+                                        hljs.highlight(str, { language: lang, ignoreIllegals: true }).value +
+                                        '</code></pre>';
+                                } catch (__) {}
+                            }
+                            return '<pre class="hljs"><code>' + md.utils.escapeHtml(str) + '</code></pre>';
+                        }
+                    });
+                    content.innerHTML = md.render(fullContent);
+                    
+                    // 高亮代码块
+                    content.querySelectorAll('pre code').forEach((block) => {
+                        hljs.highlightElement(block);
+                    });
+                } else {
+                    content.textContent = fullContent;
+                }
+                
+                // 移除加载指示器
+                content.classList.remove('loading');
+                
+                // 滚动到最新内容
+                chatContainer.scrollTop = chatContainer.scrollHeight;
+            }
+
+            // 修改完成响应容器函数，移除反馈按钮
+            function finalizeResponseContainer() {
+                const responseContainer = document.getElementById('responseContainer');
+                if (!responseContainer) return;
+                
+                // 移除加载状态
+                const content = responseContainer.querySelector('.response-content');
+                if (content) {
+                    content.classList.remove('loading');
+                }
+                
+                // 滚动到最新内容
+                chatContainer.scrollTop = chatContainer.scrollHeight;
+            }
+
+            // 创建响应容器
+            function createResponseContainer() {
+                const container = document.createElement('div');
+                container.id = 'responseContainer';
+                container.className = 'response-container';
+                
+                // 创建头像
+                const avatar = document.createElement('div');
+                avatar.className = 'response-avatar';
+                
+                // 使用角色信息设置头像
+                if (currentRole) {
+                    if (currentRole.avatar) {
+                        // 使用角色头像图片
+                        const avatarImg = document.createElement('img');
+                        avatarImg.src = currentRole.avatar;
+                        avatarImg.alt = currentRole.name;
+                        avatar.appendChild(avatarImg);
+                    } else {
+                        // 使用首字母作为头像文本
+                        avatar.textContent = currentRole.name.charAt(0).toUpperCase();
+                    }
+                } else {
+                    // 默认头像
+                    avatar.textContent = 'A';
+                }
+                
+                // 创建内容区域
+                const content = document.createElement('div');
+                content.className = 'response-content loading';
+                
+                // 添加组件到容器
+                container.appendChild(avatar);
+                container.appendChild(content);
+                
+                return container;
+            }
+
+            // 添加页面初始化处理
+            // 尝试处理URL参数，如果处理失败，则使用默认行为
+            const paramsProcessed = processUrlParams();
+
+            // 初始化，创建一个新会话
+            if (!paramsProcessed) {
+                // 仅当未从URL处理会话时才显示创建会话的按钮
+                createSessionBtn.disabled = false;
+                createSessionBtn.textContent = "创建会话";
+            }
+
+            // 添加对文本展开功能的处理
+            document.addEventListener('click', function(e) {
+                if (e.target.closest('.text-expandable')) {
+                    const expandable = e.target.closest('.text-expandable');
+                    const content = decodeURIComponent(expandable.getAttribute('data-content') || '');
+                    const title = decodeURIComponent(expandable.getAttribute('data-title') || '详细内容');
+                    
+                    if (content) {
+                        showDetailModal(title, content);
+                    }
+                }
+            });
+
+            // 检查MarkdownIt是否可用
+            if (window.markdownit) {
+                console.log('Markdown rendering enabled');
+                markdownEnabled = true;
+            } else {
+                console.warn('Markdown-it library not found, rendering plain text');
+            }
         });
     </script>
 </body>

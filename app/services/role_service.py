@@ -360,7 +360,33 @@ class RoleService:
             if not message or not isinstance(message, str):
                 logger.error(f"[{request_id}] 无效的消息格式")
                 return {"success": False, "error": "无效的消息格式"}
+            
+            # 如果提供了session_id，先从SessionRoleManager获取该会话的所有角色
+            session_roles = []
+            if session_id:
+                # 从Redis中获取会话角色
+                from app.services.session_role_manager import SessionRoleManager
+                session_role_manager = SessionRoleManager()
+                session_roles = await session_role_manager.get_session_roles(session_id)
+                logger.info(f"[{request_id}] 从Redis获取到{len(session_roles)}个会话角色")
                 
+                # 如果会话中没有角色，直接返回失败
+                if not session_roles:
+                    logger.warning(f"[{request_id}] 会话 {session_id} 中没有可用角色")
+                    return {"success": False, "error": "会话中没有可用角色"}
+                    
+                # 如果会话只有一个角色，直接返回该角色
+                if len(session_roles) == 1:
+                    role = session_roles[0]
+                    logger.info(f"[{request_id}] 会话只有一个角色，直接使用: {role.get('name', '未知角色')}")
+                    return {
+                        "success": True,
+                        "role": role,
+                        "match_score": 1.0,
+                        "match_reason": "会话中只有一个可用角色，直接使用",
+                        "matched_keywords": []
+                    }
+            
             # 执行角色匹配
             kw_extract_start = time.time()
             logger.debug(f"[{request_id}] 开始从消息中提取关键词")
@@ -377,24 +403,65 @@ class RoleService:
             except Exception as e:
                 logger.error(f"[{request_id}] 关键词提取失败: {str(e)}")
                 return {"success": False, "error": f"关键词提取失败: {str(e)}"}
-                
-            # 根据关键词匹配角色
+            
+            # 匹配角色
+            matched_roles = []
             match_start = time.time()
             logger.debug(f"[{request_id}] 开始根据关键词匹配角色")
-            matched_roles = await RoleService.match_roles_by_keywords(
-                keywords, 
-                limit=3,
-                session_id=session_id,
-                user_id=user_id
-            )
+            
+            # 如果有session_roles，只匹配这些角色
+            if session_roles:
+                logger.debug(f"[{request_id}] 使用会话角色集合匹配，共{len(session_roles)}个角色")
+                # 对会话的每个角色计算匹配分数
+                for role in session_roles:
+                    role_keywords = role.get("keywords", [])
+                    if role_keywords:
+                        message_words = RoleService._tokenize_message(message)
+                        score = RoleService._calculate_match_score(message_words, role_keywords, message)
+                        if score >= 0.1:  # 使用与原方法相同的阈值
+                            role_with_score = role.copy()
+                            role_with_score["match_score"] = score
+                            
+                            # 记录匹配到的关键词
+                            matched_keywords = []
+                            for kw in keywords:
+                                if kw in role_keywords:
+                                    matched_keywords.append(kw)
+                            role_with_score["matched_keywords"] = matched_keywords
+                            
+                            matched_roles.append(role_with_score)
+                            logger.debug(f"[{request_id}] 角色 '{role.get('name', '未知')}' 匹配分数: {score}")
+                    else:
+                        logger.debug(f"[{request_id}] 角色 '{role.get('name', '未知')}' 没有关键词，跳过匹配")
+                
+                # 按匹配分数排序
+                matched_roles = sorted(matched_roles, key=lambda x: x.get("match_score", 0), reverse=True)[:3]
+            else:
+                logger.debug(f"[{request_id}] 没有会话角色集合，不执行角色匹配")
+            
             match_time = time.time() - match_start
             logger.debug(f"[{request_id}] 角色匹配完成，耗时: {match_time:.4f}秒, 匹配到 {len(matched_roles)} 个角色")
+            
+            # 如果没有匹配到角色，则返回会话中的第一个角色
+            if not matched_roles and session_roles:
+                first_role = session_roles[0]
+                logger.info(f"[{request_id}] 未匹配到角色，使用会话中的第一个角色: {first_role.get('name', '未知角色')}")
+                first_role = first_role.copy()
+                first_role["match_score"] = 0.0
+                first_role["matched_keywords"] = []
+                return {
+                    "success": True,
+                    "role": first_role,
+                    "match_score": 0.0,
+                    "match_reason": "未找到匹配的角色，使用默认角色",
+                    "matched_keywords": []
+                }
             
             # 处理匹配结果
             if not matched_roles:
                 logger.warning(f"[{request_id}] 未找到匹配的角色")
                 return {"success": False, "error": "未找到匹配的角色"}
-                
+            
             # 获取最佳匹配角色
             best_match = matched_roles[0]
             
@@ -403,13 +470,14 @@ class RoleService:
             for kw in keywords[:3]:
                 if kw in best_match.get("matched_keywords", []):
                     match_reason += f"「{kw}」"
-                    
+            
             logger.info(f"[{request_id}] 匹配成功，最佳角色: {best_match.get('name')}, 匹配原因: {match_reason}")
             
             # 构建完整返回结果
             result = {
                 "success": True,
                 "role": best_match,
+                "match_score": best_match.get("match_score", 0.0),
                 "match_reason": match_reason,
                 "matched_keywords": best_match.get("matched_keywords", [])
             }

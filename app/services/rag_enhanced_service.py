@@ -1269,33 +1269,37 @@ Answer:"""
             init_time = time.time() - init_start
             logger.debug(f"[{request_id}] 服务初始化检查完成，耗时: {init_time:.4f}秒")
             
-            # 新增逻辑：如果提供了session_id，先检查该会话是否只有一个角色
+            # 优先从Redis获取会话角色
             if session_id and self.session_role_manager:
                 session_roles_start = time.time()
                 try:
-                    # 从会话中获取角色列表 - 使用SessionRoleManager而不是SessionService
+                    # 从会话中获取角色列表
                     session_roles = await self.session_role_manager.get_session_roles(session_id)
                     session_roles_time = time.time() - session_roles_start
                     logger.debug(f"[{request_id}] 获取会话角色列表完成，耗时: {session_roles_time:.4f}秒，找到 {len(session_roles)} 个角色")
                     
-                    # 如果会话中只有一个角色，直接返回该角色作为匹配结果
-                    if len(session_roles) == 1:
+                    # 如果会话中没有角色，记录警告但继续执行
+                    if not session_roles:
+                        logger.warning(f"[{request_id}] 会话 {session_id} 中没有角色")
+                    # 如果会话中只有一个角色，直接返回该角色
+                    elif len(session_roles) == 1:
                         role = session_roles[0]
-                        logger.info(f"[{request_id}] 会话只有一个角色，直接使用: {role.get('role_name', '未知角色')}")
+                        role_id = role.get("role_id") or role.get("id") or str(role.get("_id"))
+                        role_name = role.get("name") or role.get("role_name", "未知角色")
+                        logger.info(f"[{request_id}] 会话只有一个角色，直接使用: {role_name}")
                         
-                        # 构建返回结果
                         match_result = {
                             "success": True,
                             "role": role,
+                            "match_score": 1.0,
                             "match_reason": "会话中只有一个可用角色，直接使用",
                             "matched_keywords": []
                         }
                         
                         # 如果会话ID存在，保存匹配角色到Redis
-                        if session_id and (role.get("role_id") or role.get("id") or role.get("_id")):
+                        if session_id and role_id:
                             redis_start = time.time()
                             try:
-                                role_id = role.get("role_id") or role.get("id") or str(role.get("_id"))
                                 await asyncio.wait_for(
                                     self.redis.hset(f"chatrag:session:{session_id}:info", "matched_role_id", role_id),
                                     timeout=2.0
@@ -1336,7 +1340,7 @@ Answer:"""
             msg_process_time = time.time() - msg_process_start
             logger.debug(f"[{request_id}] 消息处理完成，耗时: {msg_process_time:.4f}秒")
             
-            # 调用角色服务进行匹配
+            # 调用角色服务进行匹配（重要：确保传入session_id）
             match_start = time.time()
             logger.debug(f"[{request_id}] 开始调用RoleService.match_role_for_message")
             
@@ -1358,7 +1362,9 @@ Answer:"""
             if session_id and match_result.get("success") and match_result.get("role"):
                 redis_start = time.time()
                 try:
-                    role_id = match_result["role"]["id"]
+                    role = match_result.get("role", {})
+                    role_id = role.get("id") or role.get("role_id") or str(role.get("_id"))
+                    
                     await asyncio.wait_for(
                         self.redis.hset(f"chatrag:session:{session_id}:info", "matched_role_id", role_id),
                         timeout=2.0
@@ -1710,7 +1716,7 @@ Answer:"""
                                     except json.JSONDecodeError:
                                         logger.warning(f"解析消息失败: {msg_data[:100]}")
                                         continue
-                                
+                                    
                                 # 将历史消息添加到完整消息列表中
                                 logger.info(f"成功解析 {len(history)} 条有效历史消息")
                                 for msg in history:

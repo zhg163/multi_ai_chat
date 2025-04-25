@@ -210,6 +210,11 @@ async def generate_response(
             if not session or "roles" not in session:
                 raise HTTPException(status_code=404, detail="未找到会话或会话中没有角色")
             
+            # 获取会话中的角色列表
+            available_roles = session.get("roles", [])
+            if not available_roles:
+                raise HTTPException(status_code=400, detail="会话中没有可用角色")
+            
             # 8. 获取RAG服务并准备消息
             rag_service = await get_initialized_rag_service()
             messages = [{"role": "user", "content": message}]
@@ -217,6 +222,8 @@ async def generate_response(
             # 9. 角色匹配
             match_result = None
             role_info = None  # 用于存储角色完整信息
+            match_score = 0.0
+            match_reason = ""
             
             try:
                 if auto_role_match:
@@ -235,7 +242,7 @@ async def generate_response(
                             # 直接使用完整的角色对象
                             role_info = matched_role
                             role_id = matched_role.get("id") or matched_role.get("role_id") or matched_role.get("_id")
-                            match_score = matched_role.get("match_score", 0.0)
+                            match_score = match_result.get("match_score", 0.0)
                             match_reason = match_result.get("match_reason", "")
                             
                             role_name = matched_role.get("name") or matched_role.get("role_name", "未知角色")
@@ -243,24 +250,29 @@ async def generate_response(
             except Exception as e:
                 logger.warning(f"角色匹配过程出错: {str(e)}，将使用默认角色")
             
-            # 10. 如果没有指定或匹配到角色，使用第一个可用角色
+            # 10. 如果没有匹配到角色，使用第一个可用角色
             if not role_id:
-                available_roles = session.get("roles", [])
-                if available_roles:
-                    first_role = available_roles[0]
-                    role_id = first_role.get("role_id") or first_role.get("id") or first_role.get("_id")
-                    logger.info(f"使用默认角色: {role_id}")
-                else:
-                    raise HTTPException(status_code=400, detail="会话中没有可用角色")
+                first_role = available_roles[0]
+                role_id = first_role.get("role_id") or first_role.get("id") or first_role.get("_id")
+                role_info = first_role  # 直接使用available_roles中的完整角色对象
+                logger.info(f"使用默认角色: {role_id}")
             
-            # 11. 如果角色匹配过程中已获取完整角色信息，则无需再次查询
+            # 11. 如果上面的步骤没有获取到完整角色信息，则在available_roles中查找
+            if not role_info:
+                for role in available_roles:
+                    role_id_in_list = role.get("role_id") or role.get("id") or str(role.get("_id"))
+                    if role_id_in_list == role_id:
+                        role_info = role
+                        logger.info(f"在会话角色中找到匹配的角色信息: {role_id}")
+                        break
+            
+            # 只有在前面的步骤都没有获取到角色信息时，才查询数据库
             if not role_info:
                 try:
                     role_info = await rag_service.get_role_info(role_id)
                     if not role_info:
                         # 如果找不到角色，尝试使用第一个可用角色
                         logger.warning(f"未找到角色: {role_id}，尝试使用替代角色")
-                        available_roles = session.get("roles", [])
                         if available_roles:
                             alternative_role = available_roles[0]
                             alternative_role_id = alternative_role.get("role_id") or alternative_role.get("id") or alternative_role.get("_id")
@@ -326,12 +338,8 @@ async def generate_response(
             )
             
             # 14. 存储完整响应到Redis
-            match_score_str = "0.0"
-            match_reason_str = ""
-            
-            if match_result and match_result.get("success"):
-                match_score_str = str(match_result.get("role", {}).get("match_score", 0.0))
-                match_reason_str = match_result.get("match_reason", "")
+            match_score_str = str(match_score)
+            match_reason_str = match_reason
             
             await redis_client.hset(request_key, mapping={
                 "response": full_response,
@@ -349,19 +357,12 @@ async def generate_response(
             await redis_client.expire(history_key, 86400 * 7)  # 7天过期
             
             # 16. 返回响应
-            match_score_float = 0.0
-            match_reason_value = ""
-            
-            if match_result and match_result.get("success"):
-                match_score_float = float(match_result.get("role", {}).get("match_score", 0.0))
-                match_reason_value = match_result.get("match_reason", "")
-            
             return {
                 "message_id": message_id,
                 "response": full_response,
                 "selected_role": role_info.get("name") or role_info.get("role_name", "Unknown"),
-                "match_score": match_score_float,
-                "match_reason": match_reason_value,
+                "match_score": match_score,
+                "match_reason": match_reason,
                 "references": references if enable_rag and references else []
             }
         finally:
@@ -723,6 +724,16 @@ async def streaming_response_generator(
                 yield f"data: {json.dumps(error_data)}\n\n"
                 return
             
+            # 获取会话中的角色列表
+            available_roles = session.get("roles", [])
+            if not available_roles:
+                error_data = {
+                    "type": "error",
+                    "message": "会话中没有可用角色"
+                }
+                yield f"data: {json.dumps(error_data)}\n\n"
+                return
+            
             # 7. 获取RAG服务并准备消息
             rag_service = await get_initialized_rag_service()
             messages = [{"role": "user", "content": message}]
@@ -730,6 +741,8 @@ async def streaming_response_generator(
             # 8. 角色匹配
             match_result = None
             role_info = None
+            match_score = 0.0
+            match_reason = ""
             
             try:
                 if auto_role_match:
@@ -747,7 +760,7 @@ async def streaming_response_generator(
                             # 直接使用完整的角色对象
                             role_info = matched_role
                             role_id = matched_role.get("id") or matched_role.get("role_id") or matched_role.get("_id")
-                            match_score = matched_role.get("match_score", 0.0)
+                            match_score = match_result.get("match_score", 0.0)
                             match_reason = match_result.get("match_reason", "")
                             
                             role_name = matched_role.get("name") or matched_role.get("role_name", "未知角色")
@@ -755,29 +768,29 @@ async def streaming_response_generator(
             except Exception as e:
                 logger.warning(f"角色匹配过程出错: {str(e)}，将使用默认角色")
             
-            # 9. 如果没有指定或匹配到角色，使用第一个可用角色
+            # 9. 如果没有匹配到角色，使用第一个可用角色
             if not role_id:
-                available_roles = session.get("roles", [])
-                if available_roles:
-                    first_role = available_roles[0]
-                    role_id = first_role.get("role_id") or first_role.get("id") or first_role.get("_id")
-                    logger.info(f"使用默认角色: {role_id}")
-                else:
-                    error_data = {
-                        "type": "error",
-                        "message": "会话中没有可用角色"
-                    }
-                    yield f"data: {json.dumps(error_data)}\n\n"
-                    return
+                first_role = available_roles[0]
+                role_id = first_role.get("role_id") or first_role.get("id") or first_role.get("_id")
+                role_info = first_role  # 直接使用available_roles中的完整角色对象
+                logger.info(f"使用默认角色: {role_id}")
             
-            # 10. 如果角色匹配过程中已获取完整角色信息，则无需再次查询
+            # 10. 如果上面的步骤没有获取到完整角色信息，则在available_roles中查找
+            if not role_info:
+                for role in available_roles:
+                    role_id_in_list = role.get("role_id") or role.get("id") or str(role.get("_id"))
+                    if role_id_in_list == role_id:
+                        role_info = role
+                        logger.info(f"在会话角色中找到匹配的角色信息: {role_id}")
+                        break
+            
+            # 只有在前面的步骤都没有获取到角色信息时，才查询数据库
             if not role_info:
                 try:
                     role_info = await rag_service.get_role_info(role_id)
                     if not role_info:
                         # 如果找不到角色，尝试使用第一个可用角色
                         logger.warning(f"未找到角色: {role_id}，尝试使用替代角色")
-                        available_roles = session.get("roles", [])
                         if available_roles:
                             alternative_role = available_roles[0]
                             alternative_role_id = alternative_role.get("role_id") or alternative_role.get("id") or alternative_role.get("_id")
@@ -811,19 +824,13 @@ async def streaming_response_generator(
             
             # 11. 发送初始匹配信息
             role_name = role_info.get("name") or role_info.get("role_name", "未知角色")
-            match_score_value = 0.0
-            match_reason_value = ""
-            
-            if match_result and match_result.get("success"):
-                match_score_value = float(match_result.get("role", {}).get("match_score", 0.0))
-                match_reason_value = match_result.get("match_reason", "")
             
             initial_data = {
                 "type": "match_info",
                 "message_id": message_id,
                 "selected_role": role_name,
-                "match_score": match_score_value,
-                "match_reason": match_reason_value
+                "match_score": match_score,
+                "match_reason": match_reason
             }
             yield f"data: {json.dumps(initial_data)}\n\n"
             
@@ -891,12 +898,8 @@ async def streaming_response_generator(
             )
             
             # 14. 存储完整响应到Redis
-            match_score_str = "0.0"
-            match_reason_str = ""
-            
-            if match_result and match_result.get("success"):
-                match_score_str = str(match_result.get("role", {}).get("match_score", 0.0))
-                match_reason_str = match_result.get("match_reason", "")
+            match_score_str = str(match_score)
+            match_reason_str = match_reason
             
             await redis_client.hset(request_key, mapping={
                 "response": response_buffer,

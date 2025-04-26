@@ -12,7 +12,6 @@ import json
 import asyncio
 
 from app.database.mongodb import get_db
-from app.database.fallback import MockCollection
 
 logger = logging.getLogger(__name__)
 
@@ -30,10 +29,7 @@ class CustomSession:
         """获取会话集合"""
         if cls.collection is None:
             db = await get_db()
-            if db is None:
-                cls.collection = MockCollection("sessions")
-            else:
-                cls.collection = db.sessions
+            cls.collection = db.sessions
         return cls.collection
 
     @classmethod

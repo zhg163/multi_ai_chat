@@ -18,7 +18,7 @@ class MockCollection:
         """初始化模拟集合"""
         self.name = name
         self.data = []
-        logger.debug(f"创建模拟集合: {name}")
+        #logger.debug(f"创建模拟集合: {name}")
     
     async def insert_one(self, document: Dict[str, Any]):
         """插入一个文档"""
@@ -54,7 +54,7 @@ class MockCollection:
     
     async def find_one(self, query: Dict[str, Any]):
         """查找单个文档"""
-        logger.debug(f"在集合 {self.name} 中查找: {query}")
+        #logger.debug(f"在集合 {self.name} 中查找: {query}")
         for doc in self.data:
             match = True
             for key, value in query.items():
@@ -62,9 +62,9 @@ class MockCollection:
                     match = False
                     break
             if match:
-                logger.debug(f"找到匹配文档: {doc.get('_id')}")
+                #logger.debug(f"找到匹配文档: {doc.get('_id')}")
                 return doc
-        logger.debug(f"未找到匹配文档")
+        #logger.debug(f"未找到匹配文档")
         return None
     
     async def update_one(self, query: Dict[str, Any], update: Dict[str, Any]):

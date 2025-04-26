@@ -3,7 +3,6 @@ from bson import ObjectId
 from typing import Dict, Any, List, Optional
 
 from app.database.connection import Database
-from app.database.fallback import MockCollection
 
 class User:
     collection = None
@@ -11,13 +10,7 @@ class User:
     @classmethod
     def get_collection(cls):
         """获取用户集合"""
-        if cls.collection is None:
-            if Database.db is None:
-                # 使用app.database.fallback中已导入的MockCollection，不从测试代码导入
-                cls.collection = MockCollection("users")
-            else:
-                cls.collection = Database.db.users
-        return cls.collection
+        return Database.db.users
 
     @classmethod
     async def create(cls, username, preferences=None, favorite_roles=None):

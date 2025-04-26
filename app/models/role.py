@@ -5,7 +5,6 @@ from bson import ObjectId
 from typing import Dict, Any, List, Optional
 
 from app.database.connection import Database
-from app.database.fallback import MockCollection
 
 class Role:
     collection = None
@@ -13,13 +12,7 @@ class Role:
     @classmethod
     def get_collection(cls):
         """获取角色集合"""
-        if cls.collection is None:
-            if Database.db is None:
-                # 使用本地的MockCollection而不是从tests导入
-                cls.collection = MockCollection("roles")
-            else:
-                cls.collection = Database.db.roles
-        return cls.collection
+        return Database.db.roles
 
     @classmethod
     async def create(cls, name, description, personality, speech_style, 
@@ -50,7 +43,7 @@ class Role:
         """根据ID获取角色"""
         if isinstance(role_id, str):
             role_id = ObjectId(role_id)
-        return await cls.get_collection().find_one({"_id": role_id})
+        return await cls.get_collection().find_one({"_id":role_id})
 
     @classmethod
     async def get_by_name(cls, name):
@@ -258,4 +251,9 @@ class Role:
             }
         )
         
-        return result.modified_count > 0 
+        return result.modified_count > 0
+
+    def __init__(self, **kwargs):
+        """初始化角色实例"""
+        for key, value in kwargs.items():
+            setattr(self, key, value) 

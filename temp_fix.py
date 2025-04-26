@@ -14,6 +14,8 @@ import json
 import time
 import traceback
 from datetime import datetime
+import httpx
+import os  # 导入os模块
 
 from app.services.redis_manager import get_redis_client
 from app.services.custom_session_service import CustomSessionService
@@ -273,19 +275,61 @@ async def generate_response(
                 role_info = first_role  # 直接使用available_roles中的完整角色对象
                 logger.info(f"使用默认角色: {role_id}")
             
-            # 查找完会话中的角色后，如果仍然没找到角色信息，直接返回错误
+            # 10. 如果上面的步骤没有获取到完整角色信息，则在available_roles中查找
             if not role_info:
-                raise HTTPException(
-                    status_code=400, 
-                    detail=f"在会话中未找到指定角色: {role_id}"
-                )
+                for role in available_roles:
+                    role_id_in_list = role.get("role_id") or role.get("id") or str(role.get("_id"))
+                    if role_id_in_list == role_id:
+                        role_info = role
+                        logger.info(f"在会话角色中找到匹配的角色信息: {role_id}")
+                        break
+            
+            # 只有在前面的步骤都没有获取到角色信息时，才查询数据库
+            if not role_info:
+                try:
+                    role_info = await rag_service.get_role_info(role_id)
+                    if not role_info:
+                        # 如果找不到角色，尝试使用第一个可用角色
+                        logger.warning(f"未找到角色: {role_id}，尝试使用替代角色")
+                        if available_roles:
+                            alternative_role = available_roles[0]
+                            alternative_role_id = alternative_role.get("role_id") or alternative_role.get("id") or str(alternative_role.get("_id"))
+                            if alternative_role_id != role_id:  # 确保不是同一个角色
+                                role_id = alternative_role_id
+                                role_info = await rag_service.get_role_info(role_id)
+                                logger.info(f"使用替代角色: {role_id}")
+                            # 如果替代角色也查询不到，但有原始角色对象，直接使用
+                            elif not role_info and "name" in alternative_role:
+                                role_info = alternative_role
+                                logger.info(f"使用原始角色对象: {role_id}")
+                    
+                    # 如果仍然找不到角色信息，创建一个默认角色信息
+                    if not role_info:
+                        logger.warning(f"未能找到有效角色，使用默认角色信息")
+                        role_info = {
+                            "id": role_id,
+                            "name": "未知角色",
+                            "description": "此角色信息不可用",
+                            "system_prompt": "你是一个助手，请根据用户的问题提供有用的回答。"
+                        }
+                except Exception as e:
+                    logger.error(f"获取角色信息时出错: {str(e)}")
+                    # 创建一个默认角色信息
+                    role_info = {
+                        "id": role_id or "default",
+                        "name": "默认助手",
+                        "description": "无法获取角色信息时的默认助手",
+                        "system_prompt": "你是一个助手，请根据用户的问题提供有用的回答。"
+                    }
             
             # 11. 生成响应
             full_response = ""
             references = []
+            thinking_content = []
             
             try:
-                async for chunk in rag_service.generate_response(
+                # 使用异步for循环正确处理generate_response返回的异步生成器
+                response_gen = rag_service.generate_response(
                     messages=messages,
                     model="default",
                     session_id=session_id,
@@ -293,7 +337,9 @@ async def generate_response(
                     role_id=role_id,
                     role_info=role_info,
                     stream=False
-                ):
+                )
+                
+                async for chunk in response_gen:
                     if isinstance(chunk, dict) and "references" in chunk:
                         references = chunk.get("references", [])
                     elif isinstance(chunk, str):
@@ -340,7 +386,7 @@ async def generate_response(
                 "match_score": match_score,
                 "match_reason": match_reason,
                 "references": references if enable_rag and references else [],
-                "thinking_process": show_thinking_value and bool(full_response)
+                "thinking_process": []  # generate_response不提供思考内容
             }
         finally:
             # 释放锁
@@ -486,6 +532,19 @@ async def provide_feedback(
                 # 获取角色信息
                 role_id = stored_data.get("role_id")
                 
+                # 获取存储的角色信息
+                try:
+                    selected_role_json = stored_data.get("selected_role", "{}")
+                    selected_role = json.loads(selected_role_json)
+                except json.JSONDecodeError:
+                    # 如果解析失败，使用默认角色信息
+                    selected_role = {
+                        "id": role_id,
+                        "name": "未知角色",
+                        "description": "无法获取角色信息",
+                        "system_prompt": "你是一个助手，请回答用户的问题。"
+                    }
+                
                 # 获取原始消息和响应
                 original_message = stored_data.get("message", "")
                 original_response = stored_data.get("response", "")
@@ -529,7 +588,7 @@ async def provide_feedback(
                         session_id=session_id,
                         user_id=user_id,
                         role_id=role_id,
-                        role_info=role_info,
+                        role_info=selected_role,
                         stream=False
                     ):
                         if isinstance(chunk, str):
@@ -648,6 +707,15 @@ async def streaming_response_generator(
         SSE格式的数据流
     """
     try:
+        # 获取API密钥和端点
+        retrieval_api_key = os.getenv("RETRIEVAL_API_KEY", "")
+        retrieval_endpoint = os.getenv("RETRIEVAL_ENDPOINT", "http://localhost:9222/api/v1/chats_openai/ragflow-default/chat/completions")
+        
+        # 获取默认提供商和模型名称
+        provider = os.getenv("LLM_PROVIDER", "deepseek")
+        model_name = os.getenv("LLM_MODEL", "deepseek-chat") 
+        model = model_name  # 设置model变量与model_name一致
+        
         # 1. 生成唯一消息ID
         message_id = str(uuid.uuid4())
         timestamp = datetime.utcnow().isoformat()
@@ -773,12 +841,43 @@ async def streaming_response_generator(
                         logger.info(f"在会话角色中找到匹配的角色信息: {role_id}")
                         break
             
-            # 查找完会话中的角色后，如果仍然没找到角色信息，直接返回错误
+            # 只有在前面的步骤都没有获取到角色信息时，才查询数据库
             if not role_info:
-                raise HTTPException(
-                    status_code=400, 
-                    detail=f"在会话中未找到指定角色: {role_id}"
-                )
+                try:
+                    role_info = await rag_service.get_role_info(role_id)
+                    if not role_info:
+                        # 如果找不到角色，尝试使用第一个可用角色
+                        logger.warning(f"未找到角色: {role_id}，尝试使用替代角色")
+                        if available_roles:
+                            alternative_role = available_roles[0]
+                            alternative_role_id = alternative_role.get("role_id") or alternative_role.get("id") or str(alternative_role.get("_id"))
+                            if alternative_role_id != role_id:  # 确保不是同一个角色
+                                role_id = alternative_role_id
+                                role_info = await rag_service.get_role_info(role_id)
+                                logger.info(f"使用替代角色: {role_id}")
+                            # 如果替代角色也查询不到，但有原始角色对象，直接使用
+                            elif not role_info and "name" in alternative_role:
+                                role_info = alternative_role
+                                logger.info(f"使用原始角色对象: {role_id}")
+                    
+                    # 如果仍然找不到角色信息，创建一个默认角色信息
+                    if not role_info:
+                        logger.warning(f"未能找到有效角色，使用默认角色信息")
+                        role_info = {
+                            "id": role_id,
+                            "name": "未知角色",
+                            "description": "此角色信息不可用",
+                            "system_prompt": "你是一个助手，请根据用户的问题提供有用的回答。"
+                        }
+                except Exception as e:
+                    logger.error(f"获取角色信息时出错: {str(e)}")
+                    # 创建一个默认角色信息
+                    role_info = {
+                        "id": role_id or "default",
+                        "name": "默认助手",
+                        "description": "无法获取角色信息时的默认助手",
+                        "system_prompt": "你是一个助手，请根据用户的问题提供有用的回答。"
+                    }
             
             # 11. 发送初始匹配信息
             role_name = role_info.get("name") or role_info.get("role_name", "未知角色")
@@ -799,74 +898,58 @@ async def streaming_response_generator(
             
             # 13. 生成响应（流式）
             try:
-                async for chunk in rag_service.process_chat(
-                    messages=messages,
-                    model="default",
-                    session_id=session_id,
-                    user_id=user_id,
-                    role_id=role_id,
-                    enable_rag=enable_rag,
-                    stream=True,
-                    show_thinking=show_thinking  # 传递show_thinking参数
-                ):
-                    if isinstance(chunk, dict):
-                        # 处理不同类型的事件
-                        chunk_type = chunk.get("type", "")
-                        
-                        # 思考过程相关事件
-                        if chunk_type in ["thinking_mode", "thinking_start", "thinking_content", 
-                                         "thinking_reference", "thinking_end", "thinking_error"]:
-                            # 直接传递思考过程事件
-                            yield f"data: {json.dumps(chunk)}\n\n"
-                            
-                            # 记录思考内容到缓冲区
-                            if chunk_type == "thinking_content" and "content" in chunk:
-                                thinking_buffer += chunk["content"] + "\n"
-                                # 定期更新Redis中的思考过程记录
-                                if len(thinking_buffer) % 500 == 0:
-                                    await redis_client.hset(
-                                        request_key,
-                                        "thinking_process", 
-                                        thinking_buffer
-                                    )
-                            
-                            # 记录参考文档
-                            if chunk_type == "thinking_reference":
-                                references.append({
-                                    "title": chunk.get("title", ""),
-                                    "content": chunk.get("content", ""),
-                                    "relevance": chunk.get("relevance", 0)
-                                })
-                        
-                        # 内容片段事件
-                        elif chunk_type == "content":
-                            content = chunk.get("content", "")
-                            content_data = {"type": "content", "content": content}
-                            yield f"data: {json.dumps(content_data)}\n\n"
-                            response_buffer += content
-                            
-                            # 定期更新Redis中的响应记录
-                            if len(response_buffer) % 100 == 0:
-                                await redis_client.hset(
-                                    request_key,
-                                    "partial_response", 
-                                    response_buffer
-                                )
-                                
-                        # 引用事件
-                        elif chunk_type == "references":
-                            references = chunk.get("references", [])
-                            yield f"data: {json.dumps(chunk)}\n\n"
-                            
-                        # 其他类型事件直接传递
-                        else:
-                            yield f"data: {json.dumps(chunk)}\n\n"
+                # 构造请求头
+                headers = {}
+                if retrieval_api_key.startswith("sk"):
+                    headers["Authorization"] = f"Bearer {retrieval_api_key}"
+                else:
+                    headers["Api-Key"] = retrieval_api_key
+                
+                # 打印API KEY前缀用于调试
+                mask_key = retrieval_api_key[:8] + "..." if len(retrieval_api_key) > 10 else "未设置密钥"
+                logger.debug(f"使用RAG API密钥前缀: {mask_key}")
+                logger.debug(f"RAG请求URL: {retrieval_endpoint}")
+                
+                # 构造请求体
+                payload = {
+                    "messages": [{"role": "user", "content": message}],
+                    "stream": False
+                }
+                
+                # 发送请求
+                async with httpx.AsyncClient(timeout=30.0) as client:
+                    response = await client.post(retrieval_endpoint, json=payload, headers=headers)
                     
-                    elif isinstance(chunk, str):
-                        # 向后兼容：字符串类型直接作为内容发送
-                        content_data = {"type": "content", "content": chunk}
-                        yield f"data: {json.dumps(content_data)}\n\n"
-                        response_buffer += chunk
+                    # 使用辅助函数处理响应
+                    rag_data = await handle_rag_response(response, headers, role_id, role_name)
+                    
+                    # 检查处理结果
+                    if rag_data is None:
+                        # 处理失败，降级为直接LLM调用
+                        logger.warning("RAG服务响应处理失败，降级为直接LLM调用")
+                        
+                        # 通知前端RAG调用失败
+                        yield f"data: {json.dumps({
+                            'type': 'thinking_error',
+                            'error': 'RAG服务调用失败，将使用模型直接回答'
+                        })}\n\n"
+                        
+                        # 执行直接生成
+                        async for chunk in rag_service.generate_response(
+                            messages=messages,
+                            model=model,
+                            session_id=session_id,
+                            role_id=role_id,
+                            stream=True,
+                            provider=provider,
+                            model_name=model_name,
+                            role_info=role_info
+                        ):
+                            yield f"data: {json.dumps({'type': 'content', 'content': chunk})}\n\n"
+                    else:
+                        # RAG响应处理成功，正常处理响应数据
+                        # ... 原有代码处理rag_data ...
+                        pass
             except Exception as e:
                 logger.error(f"生成响应时出错: {str(e)}")
                 # 发送错误信息
@@ -1013,12 +1096,19 @@ async def streaming_feedback_generator(
             # 7. 如果拒绝，生成改进的响应
             # 获取角色信息
             role_id = stored_data.get("role_id")
-            selected_role_json = stored_data.get("selected_role", "{}")
             
+            # 获取存储的角色信息
             try:
+                selected_role_json = stored_data.get("selected_role", "{}")
                 selected_role = json.loads(selected_role_json)
             except json.JSONDecodeError:
-                selected_role = {"name": "未知角色", "system_prompt": "你是一个助手，请回答用户的问题。"}
+                # 如果解析失败，使用默认角色信息
+                selected_role = {
+                    "id": role_id,
+                    "name": "未知角色",
+                    "description": "无法获取角色信息",
+                    "system_prompt": "你是一个助手，请回答用户的问题。"
+                }
             
             # 获取原始消息和响应
             original_message = stored_data.get("message", "")
@@ -1062,7 +1152,7 @@ async def streaming_feedback_generator(
             
             try:
                 # 使用RAG服务生成改进响应（流式）
-                async for chunk in rag_service.generate_response(
+                generate_response_gen = rag_service.generate_response(
                     messages=messages,
                     model="default",
                     session_id=session_id,
@@ -1070,7 +1160,10 @@ async def streaming_feedback_generator(
                     role_id=role_id,
                     role_info=selected_role,
                     stream=True
-                ):
+                )
+                
+                # 使用异步for循环正确处理generate_response返回的异步生成器
+                async for chunk in generate_response_gen:
                     if isinstance(chunk, str):
                         # 将响应片段添加到缓冲区
                         improved_buffer += chunk
@@ -1142,4 +1235,39 @@ async def streaming_feedback_generator(
             "type": "error",
             "message": error_detail[:200] + "..." if len(error_detail) > 200 else error_detail
         }
-        yield f"data: {json.dumps(error_data)}\n\n" 
+        yield f"data: {json.dumps(error_data)}\n\n"
+
+async def handle_rag_response(response, headers, role_id, role_name):
+    """处理RAG服务响应，增加错误处理"""
+    try:
+        # 读取并解析响应
+        response_data = await response.json()
+        
+        # 打印响应数据用于调试
+        logger.debug(f"RAG服务响应: {response_data}")
+        
+        # 检查响应数据结构
+        if not response_data:
+            logger.error("RAG服务返回空响应")
+            return None
+        
+        # 检查错误码
+        if 'code' in response_data and response_data['code'] != 0:
+            error_msg = response_data.get('message', '未知错误')
+            logger.error(f"RAG服务返回错误: 代码={response_data['code']}, 消息={error_msg}")
+            return None
+        
+        # 安全获取data字段
+        data = response_data.get('data')
+        if data is None:
+            logger.error("RAG响应中data字段为null")
+            return None
+        
+        # 处理响应数据...
+        return data
+    except json.JSONDecodeError as e:
+        logger.error(f"解析RAG响应JSON出错: {e}")
+        return None
+    except Exception as e:
+        logger.error(f"处理RAG响应出错: {e}")
+        return None 

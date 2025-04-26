@@ -28,6 +28,7 @@ from ..services.embedding_service import EmbeddingService
 from ..memory.memory_manager import MemoryManager
 from ..models.session_role import SessionRole
 from ..models.custom_session import CustomSession
+from ..models.role import Role
 
 # 创建日志记录器
 logger = logging.getLogger("rag_enhanced")
@@ -607,7 +608,7 @@ Answer:"""
         
         # 如果指定了角色ID但没有角色信息，获取角色信息
         if role_id and not role_info:
-            role_info = await self.get_role_info(role_id)
+            role_info = await self.get_role_info(session_id, role_id)
         
         # 确定是否使用RAG
         use_rag = False
@@ -645,7 +646,7 @@ Answer:"""
             
             # 准备带有角色信息的消息
             prepared_messages = await self._prepare_messages_with_role_info(
-                rag_messages, role_id, role_info
+                rag_messages, role_id, role_info, session_id
             )
             
             # 生成回答
@@ -1167,30 +1168,18 @@ Answer:"""
             logger.error(f"[{request_id}] 角色匹配过程中出错，耗时: {total_time:.4f}秒, 错误: {str(e)}", exc_info=True)
             return {"success": False, "error": str(e)}
     
-    async def get_role_info(self, role_id: str) -> Dict:
+    async def get_role_info(self, session_id: str ,role_id: str) -> Dict:
         """
-        获取角色信息
+        获取角色信息 - 从会话中获取简化的角色信息
         
         Args:
             role_id: 角色ID
             
         Returns:
-            Dict: 角色信息
+            Dict: 简化的角色信息
         """
-        if not self.role_service:
-            logger.warning("角色服务未初始化")
-            return None
-        
-        try:
-            role_info = await self.role_service.get_role_by_id(role_id)
-            if role_info:
-                return role_info
-            
-            logger.warning(f"未找到角色: {role_id}")
-            return None
-        except Exception as e:
-            logger.error(f"获取角色信息失败: {str(e)}")
-            return None
+        # 使用新方法获取角色信息，不查询数据库
+        return await self.get_session_role(session_id,role_id)
     
     async def generate_response(self, messages: List[dict], model: str = "deepseek-chat", 
                             session_id: str = None, user_id: str = None, role_id: str = None,
@@ -1242,9 +1231,9 @@ Answer:"""
         # 重要：使用服务中现有的内部方法构建完整上下文
         # 如果提供了role_info，就不需要再查询角色信息
         if role_id and not role_info:
-            role_info = await self.get_role_info(role_id)
+            role_info = await self.get_role_info(session_id,role_id)
         
-        prepared_messages = await self._prepare_messages_with_role_info(messages, role_id, role_info)
+        prepared_messages = await self._prepare_messages_with_role_info(messages, role_id, role_info, session_id)
         
         # 如果需要RAG，执行知识检索流程
         if need_rag:
@@ -1719,7 +1708,7 @@ Answer:"""
         
         return messages
     
-    async def _prepare_messages_with_role_info(self, messages: List[dict], role_id: str, role_info: Dict[str, Any] = None) -> List[dict]:
+    async def _prepare_messages_with_role_info(self, messages: List[dict], role_id: str, role_info: Dict[str, Any] = None, session_id: str = None) -> List[dict]:
         """
         使用预先获取的角色信息准备消息列表
         
@@ -1736,7 +1725,7 @@ Answer:"""
         
         # 如果没有提供角色信息且有角色ID，获取角色信息
         if not role_info and role_id:
-            role_info = await self.get_role_info(role_id)
+            role_info = await self.get_role_info(session_id, role_id)
             
         if not role_info:
             logger.warning(f"未找到角色信息，使用原始消息: {role_id}")
@@ -1833,7 +1822,7 @@ Answer:"""
             Updated list of messages
         """
         # 为保持兼容性，调用新的实现
-        return await self._prepare_messages_with_role_info(messages, role_id, None) 
+        return await self._prepare_messages_with_role_info(messages, role_id, None, role_id) 
 
     def _build_role_aware_rag_prompt(self, context: str, role_info: Dict) -> str:
         """构建保持角色风格的RAG提示模板
@@ -1867,3 +1856,70 @@ Answer:"""
 请直接回答问题，不要提及你在使用"参考信息"。
 """
         return rag_prompt
+
+    async def get_session_role(self, session_id: str, role_id: str = None, role_name: str = None) -> Dict:
+        """
+        从会话中获取角色信息，并返回简化的角色对象
+        
+        Args:
+            session_id: 会话ID
+            role_id: 角色ID（可选）
+            role_name: 角色名称（可选）
+            
+        Returns:
+            Dict: 简化的角色信息
+        """
+        if not session_id:
+            logger.warning("未提供会话ID")
+            return None
+        
+        try:
+            # 使用session_role_manager获取会话角色列表
+            if not self.session_role_manager:
+                logger.warning("会话角色管理器未初始化")
+                return None
+                
+            session_roles = await self.session_role_manager.get_session_roles(session_id)
+            
+            if not session_roles:
+                logger.warning(f"会话 {session_id} 中没有角色")
+                return None
+            
+            # 查找指定角色
+            target_role = None
+            
+            # 1. 如果提供了role_id，按ID查找
+            if role_id:
+                for role in session_roles:
+                    current_role_id = role.get("role_id") or role.get("id") or str(role.get("_id"))
+                    if current_role_id and str(current_role_id) == str(role_id):
+                        target_role = role
+                        break
+            
+            # 2. 如果提供了role_name且没找到角色，按名称查找
+            elif role_name and not target_role:
+                for role in session_roles:
+                    current_role_name = role.get("role_name") or role.get("name")
+                    if current_role_name and current_role_name == role_name:
+                        target_role = role
+                        break
+            
+            # 3. 如果没有提供ID或名称且会话只有一个角色，直接使用该角色
+            elif len(session_roles) == 1:
+                target_role = session_roles[0]
+            
+            # 构建简化的角色信息对象
+            if target_role:
+                role_info = {
+                    "role_id": target_role.get("role_id") or target_role.get("id") or str(target_role.get("_id")),
+                    "name": target_role.get("role_name") or target_role.get("name", "未知角色"),
+                    "system_prompt": target_role.get("system_prompt", "你是一个助手，请回答用户的问题。")
+                }
+                return role_info
+            
+            logger.warning(f"在会话 {session_id} 中未找到匹配的角色")
+            return None
+            
+        except Exception as e:
+            logger.error(f"从会话获取角色信息失败: {str(e)}")
+            return None

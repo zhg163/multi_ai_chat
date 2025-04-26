@@ -723,7 +723,7 @@
                     <label for="apiEndpoint" class="form-label">发送消息地址</label>
                     <select id="apiEndpoint" class="form-select">
                         <option value="/api/two-phase-stream/generate">流式思考 (/api/two-phase-stream/generate)</option>
-                        <option value="/api/two-phase/generate" selected>标准接口 (/api/two-phase/generate)</option>
+                        <option value="/api/two-phase-streamrag/generate" selected>RAG增强接口 (/api/two-phase-streamrag/generate)</option>
                     </select>
                 </div>
 
@@ -1786,6 +1786,33 @@
                 divider.className = 'thinking-response-divider';
                 divider.setAttribute('data-role-name', currentRole ? currentRole.name : '助手');
                 chatContainer.appendChild(divider);
+            }
+
+            // 添加思考步骤的函数
+            function appendThinkingStep(content) {
+                if (!content) return;
+                
+                const thinkingContainer = document.getElementById('thinkingContainer');
+                if (!thinkingContainer) return;
+                
+                const contentContainer = thinkingContainer.querySelector('.thinking-content');
+                if (!contentContainer) return;
+                
+                // 创建思考步骤元素
+                const step = document.createElement('div');
+                step.className = 'thinking-step';
+                
+                // 添加内容
+                const stepContent = document.createElement('div');
+                stepContent.className = 'thinking-step-content';
+                stepContent.textContent = content;
+                step.appendChild(stepContent);
+                
+                // 添加到思考内容容器
+                contentContainer.appendChild(step);
+                
+                // 滚动到最新内容
+                chatContainer.scrollTop = chatContainer.scrollHeight;
             }
 
             // 添加思考错误的函数

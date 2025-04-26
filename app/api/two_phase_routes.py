@@ -125,7 +125,7 @@ async def generate_response(
     参数:
         session_id: 会话标识符
         message: 用户消息内容
-        user_id: 用户ID（可选）
+        user_id: 用户ID
         enable_rag: 是否启用RAG增强（可选，默认为True）
         auto_role_match: 是否启用自动角色匹配（可选，默认为True）
         show_thinking: 是否显示思考过程（可选，默认为True）

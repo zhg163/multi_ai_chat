@@ -1125,6 +1125,11 @@
                     url.searchParams.append('session_id', currentSessionId);
                     url.searchParams.append('message', message);
                     
+                    // 添加user_id参数
+                    const urlParams = getUrlParams();
+                    const userId = urlParams.userId || 'anonymous';
+                    url.searchParams.append('user_id', userId);
+                    
                     // 添加显示思考过程参数
                     const showThinkingCheckbox = document.getElementById('showThinking');
                     if (showThinkingCheckbox && showThinkingCheckbox.checked) {

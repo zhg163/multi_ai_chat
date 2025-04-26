@@ -198,26 +198,6 @@ class MemoryManager:
             elif role_id:
                 logger.info(f"MemoryManager: 处理消息，角色ID: {role_id}, 类型: {type(role_id).__name__}")
                 
-                # 尝试预先获取角色名称，用于日志记录
-                try:
-                    from app.database.connection import get_database
-                    from bson.objectid import ObjectId
-                    
-                    if role_id and str(role_id).strip():
-                        try:
-                            db = await get_database()
-                            if db is not None:
-                                object_id = ObjectId(role_id)
-                                role_info = await db.roles.find_one({"_id": object_id})
-                                
-                                if role_info and "name" in role_info:
-                                    logger.info(f"MemoryManager: 找到角色名称: {role_info['name']}")
-                        except Exception as e:
-                            logger.info(f"MemoryManager: 预先获取角色名称失败 (非关键错误): {str(e)}")
-                except Exception:
-                    # 这只是用于日志记录的非关键操作，忽略错误
-                    pass
-            
             # 添加消息，并获取是否需要归档的消息
             try:
                 result, oldest_message = await self.short_term_memory.add_message(

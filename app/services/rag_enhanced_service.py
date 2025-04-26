@@ -68,6 +68,9 @@ class RAGEnhancedService:
         self.stop_generation = {}  # Store message IDs that need to stop generation
         self._initialized = False
         
+        # 设置应用配置
+        self.app_config = settings
+        
         # 调试模式配置
         self.debug_mode = os.environ.get("RAG_DEBUG_MODE", "False").lower() == "true"
         if self.debug_mode:
@@ -76,6 +79,11 @@ class RAGEnhancedService:
             self.logger.debug(f"RAG URL: {self.retrieval_url}")
             self.logger.debug(f"RAG API Key: {self.api_key[:5]}...（隐藏剩余部分）")
             self.logger.debug(f"RAG Chat ID: {self.ragflow_chat_id}")
+    
+    @property
+    def initialized(self):
+        """提供对 _initialized 的访问"""
+        return self._initialized
     
     async def initialize(self):
         """Asynchronous initialization of the service"""
@@ -529,7 +537,7 @@ Answer:"""
             
             if memory_manager and memory_manager.short_term_memory and memory_manager.short_term_memory.redis:
                 redis_client = memory_manager.short_term_memory.redis
-                redis_key = f"session:{user_id}:{session_id}"
+                redis_key = f"session:{session_id}"
                 
                 exists = await redis_client.exists(redis_key)
                 return exists
@@ -548,12 +556,11 @@ Answer:"""
         enable_rag: bool = True,
         lang: str = "zh",
         provider: str = None,
-        model_name: str = None,
-        api_key: str = None,
+        api_key: str = None,     # 保留此参数但不传递给generate_response
         stream: bool = True,
         role_id: str = None,
         auto_role_match: bool = False,
-        show_thinking: bool = False  # 新增参数：是否显示思考过程
+        show_thinking: bool = False  # 是否显示思考过程
     ) -> AsyncGenerator[Union[Dict, str], None]:
         """增强的聊天处理流程，支持显示思考过程
         
@@ -565,7 +572,6 @@ Answer:"""
             enable_rag: 是否启用RAG（可选，默认为True）
             lang: 语言（可选，默认为中文）
             provider: 提供商名称（可选）
-            model_name: 模型名称（可选）
             api_key: API密钥（可选）
             stream: 是否使用流式响应（可选，默认为True）
             role_id: 角色ID（可选）
@@ -598,7 +604,6 @@ Answer:"""
                 user_id=user_id,
                 lang=lang,
                 provider=provider,
-                model_name=model_name,
                 api_key=api_key
             )
             
@@ -646,10 +651,10 @@ Answer:"""
             
             # 准备带有角色信息的消息
             prepared_messages = await self._prepare_messages_with_role_info(
-                rag_messages, role_id, role_info, session_id
+                rag_messages, role_id, role_info, session_id, user_id
             )
             
-            # 生成回答
+            # 生成回答 - 移除model_name和api_key参数
             async for chunk in self.generate_response(
                 messages=prepared_messages,
                 model=model,
@@ -658,9 +663,7 @@ Answer:"""
                 role_id=role_id,
                 role_info=role_info,
                 stream=True,
-                provider=provider,
-                model_name=model_name,
-                api_key=api_key
+                provider=provider
             ):
                 if isinstance(chunk, str):
                     yield {"type": "content", "content": chunk}
@@ -688,7 +691,7 @@ Answer:"""
             
             # 准备带有角色信息的消息
             prepared_messages = await self._prepare_messages_with_role_info(
-                messages, role_id, role_info
+                messages, role_id, role_info, session_id, user_id
             )
             
             # 生成回答
@@ -700,111 +703,10 @@ Answer:"""
                 role_id=role_id,
                 role_info=role_info,
                 stream=stream,
-                provider=provider,
-                model_name=model_name,
-                api_key=api_key
+                provider=provider
             ):
                 yield chunk
     
-    async def save_to_memory(self, session_id: str, user_id: str, last_question: str, 
-                        ai_response: str, role_id: Optional[str] = None):
-        """
-        Save user question and AI reply to short-term memory (MongoDB and Redis)
-        
-        Args:
-            session_id: Session ID
-            user_id: User ID
-            last_question: User's last question
-            ai_response: AI's reply
-            role_id: Used role ID
-        """
-        # Ensure the service is initialized
-        await self._ensure_initialized()
-        
-        if not session_id or not user_id:
-            self.logger.error("Failed to save to memory: Session ID or user ID is empty")
-            return
-            
-        try:
-            # 使用 message_service 创建消息记录到 MongoDB
-            user_message = await self.message_service.create_message(
-                content=last_question,
-                message_type="USER",
-                user_id=user_id,
-                session_id=session_id,
-                metadata={"role_id": role_id} if role_id else None
-            )
-            
-            ai_message = await self.message_service.create_message(
-                content=ai_response,
-                message_type="AI",
-                user_id=user_id,
-                session_id=session_id,
-                metadata={"role_id": role_id} if role_id else None
-            )
-            
-            # 直接将消息保存到 Redis
-            try:
-                # 获取 Redis 客户端
-                from app.memory.memory_manager import get_memory_manager
-                memory_manager = await get_memory_manager()
-                
-                if memory_manager and memory_manager.short_term_memory and memory_manager.short_term_memory.redis:
-                    redis_client = memory_manager.short_term_memory.redis
-                    redis_key = f"messages:{user_id}:{session_id}"
-                    
-                    # 准备用户消息
-                    user_msg = {
-                        "role": "user",
-                        "content": last_question,
-                        "timestamp": datetime.utcnow().isoformat(),
-                        "message_id": str(user_message.id) if hasattr(user_message, 'id') else str(uuid.uuid4()),
-                        "metadata": {"role_id": role_id} if role_id else {}
-                    }
-                    
-                    # 准备AI消息
-                    ai_msg = {
-                        "role": "assistant",
-                        "content": ai_response,
-                        "timestamp": datetime.utcnow().isoformat(),
-                        "message_id": str(ai_message.id) if hasattr(ai_message, 'id') else str(uuid.uuid4()),
-                        "metadata": {"role_id": role_id} if role_id else {}
-                    }
-                    
-                    # 将消息添加到 Redis 列表
-                    await redis_client.rpush(redis_key, json.dumps(user_msg))
-                    await redis_client.rpush(redis_key, json.dumps(ai_msg))
-                    
-                    # 设置过期时间 (7天)
-                    await redis_client.expire(redis_key, 7 * 24 * 60 * 60)
-                    
-                    self.logger.info(f"Saved conversation to Redis, key: {redis_key}")
-            except Exception as e:
-                self.logger.error(f"Failed to save to Redis: {str(e)}")
-            
-            self.logger.info(f"Saved conversation to MongoDB, user message ID: {user_message.id}, AI message ID: {ai_message.id}")
-            
-            # If there is a role ID, update role usage count
-            if role_id and ENABLE_ROLE_BASED_CHAT:
-                try:
-                    # Initialize SessionRoleManager
-                    from app.memory.memory_manager import get_memory_manager
-                    memory_manager = await get_memory_manager()
-                    
-                    if memory_manager and memory_manager.short_term_memory and memory_manager.short_term_memory.redis:
-                        redis_client = memory_manager.short_term_memory.redis
-                        session_role_manager = SessionRoleManager(redis_client)
-                        
-                        # Update role usage count - 修正传递的参数
-                        await session_role_manager.update_role_usage_count(session_id, role_id)
-                        self.logger.info(f"Updated role {role_id} usage count")
-                except Exception as e:
-                    self.logger.error(f"Failed to update role usage count: {str(e)}")
-            
-            return user_message.id, ai_message.id
-        except Exception as e:
-            self.logger.error(f"Failed to save to memory: {str(e)}")
-            return None, None
     
     async def stop_message_generation(self, message_id: str) -> bool:
         """
@@ -1037,7 +939,7 @@ Answer:"""
             raise ValueError("使用Deepseek服务需要提供有效的API密钥")
 
     async def match_role_for_chat(self, messages, session_id=None, user_id=None, lang="zh", 
-                            provider=None, model_name=None, api_key=None):
+                            provider=None, api_key=None):
         """匹配最适合的角色并返回结果"""
         start_time = time.time()
         request_id = str(uuid.uuid4())
@@ -1181,135 +1083,144 @@ Answer:"""
         # 使用新方法获取角色信息，不查询数据库
         return await self.get_session_role(session_id,role_id)
     
-    async def generate_response(self, messages: List[dict], model: str = "deepseek-chat", 
-                            session_id: str = None, user_id: str = None, role_id: str = None,
-                            role_info: Dict[str, Any] = None, stream: bool = True, 
-                            provider: str = None, model_name: str = None, 
-                            api_key: str = None) -> AsyncGenerator:
+    async def _get_model_config(self, model, provider):
         """
-        第二阶段：基于已选择的角色生成回复
-        
-        专门用于两阶段API，假设角色匹配已在第一阶段完成
+        Get model configuration based on model and provider parameters
         
         Args:
-            messages: 消息列表
-            model: 模型名称
-            session_id: 会话ID
-            user_id: 用户ID
-            role_id: 角色ID
-            role_info: 角色完整信息（如果提供则不再查询数据库）
-            stream: 是否启用流式输出 
-            provider: LLM提供商
-            model_name: 模型名称（优先级高于model）
-            api_key: API密钥
+            model: Model name or configuration
+            provider: Provider name or configuration
             
-        Yields:
-            生成内容或字典
+        Returns:
+            Dict: Model configuration
         """
-        # 确保服务初始化
-        await self._ensure_initialized()
-        
-        if not messages:
-            yield "错误：消息列表为空"
-            return
-        
-        # 获取用户最新消息
-        query = ""
-        for msg in reversed(messages):
-            if msg["role"] == "user":
-                query = msg["content"]
-                break
-        
-        # 检查是否需要执行RAG流程
-        need_rag = True
-        
-        # 快速规则评估
-        if len(query) < 10:
-            need_rag = False
-            logger.info(f"快速规则触发: 问题过短，无需RAG分析, 跳过RAG分析")
-        
-        # 重要：使用服务中现有的内部方法构建完整上下文
-        # 如果提供了role_info，就不需要再查询角色信息
-        if role_id and not role_info:
-            role_info = await self.get_role_info(session_id,role_id)
-        
-        prepared_messages = await self._prepare_messages_with_role_info(messages, role_id, role_info, session_id)
-        
-        # 如果需要RAG，执行知识检索流程
-        if need_rag:
-            # 使用现有的RAG检索方法
-            rag_results = await self._retrieve_knowledge(query)
-            
-            # 将RAG结果添加到消息中
-            if rag_results:
-                logger.info(f"添加{len(rag_results)}条检索结果到上下文")
-                
-                # 添加RAG结果到系统提示
-                prepared_messages = await self._add_rag_to_context(prepared_messages, rag_results, role_info)
-                
-                # 可选：将结果以字典形式返回给前端（非文本内容）
-                yield {
-                    "references": rag_results,
-                    "type": "references"
-                }
-        else:
-            logger.info(f"使用快速规则评估: 问题过短，无需RAG分析")
-        
-        # 调用LLM生成回复
         try:
-            model_to_use = model_name or model
-            logger.info(f"调用LLM生成回复，提供商: {provider or '默认'}, 模型: {model_to_use}")
+            # Use _determine_model to get the model configuration
+            model_config = self._determine_model(
+                model=model,
+                provider=provider,
+                model_name=None,
+                api_key=None
+            )
             
-            # 确保provider不为None
-            effective_provider = provider
-            if effective_provider is None:
-                effective_provider = self.llm_service.default_config.provider.value if hasattr(self.llm_service.default_config.provider, 'value') else 'deepseek'
-                logger.debug(f"使用默认提供商: {effective_provider}")
-            
-            if stream:
-                # 使用流式生成API
-                async for content in self.llm_service.generate_stream(
-                    messages=prepared_messages,
-                    config={
-                        "model": model_to_use,
-                        "provider": effective_provider,
-                        "api_key": api_key
-                    }
-                ):
-                    if isinstance(content, dict) and "content" in content:
-                        yield content["content"]
-                    elif hasattr(content, "content"):
-                        yield content.content
-                    else:
-                        yield content
-            else:
-                # 使用非流式生成API
-                response = await self.llm_service.generate_response(
-                    messages=prepared_messages,
-                    config={
-                        "model": model_to_use,
-                        "provider": effective_provider,
-                        "api_key": api_key
-                    }
-                )
-                # 返回整个响应内容
-                if hasattr(response, "content"):
-                    yield response.content
-                else:
-                    yield response
+            # If _determine_model returns a string (error message), return None
+            if isinstance(model_config, str):
+                logger.error(f"Failed to determine model: {model_config}")
+                return None
                 
-            # 处理消息存储
-            if session_id:
-                try:
-                    # 收集完整回复 - 在实际实现中这部分通常在API层完成
-                    pass
-                except Exception as storage_err:
-                    logger.error(f"存储消息失败: {str(storage_err)}")
+            return model_config
+        except Exception as e:
+            logger.error(f"Error getting model configuration: {str(e)}")
+            logger.exception(e)
+            return None
+        
+    async def generate_response(
+        self,
+        messages: List[Dict],
+        model: Union[str, Dict[str, Any]] = None,
+        provider: Union[str, Dict[str, Any]] = None,
+        temperature: float = 0.7,
+        top_p: float = 0.95,
+        stream: bool = True,
+        user_id: str = None,
+        session_id: str = None,
+        role_id: str = None,
+        role_info: Dict = None,
+        system_prompt: str = None,
+    ) -> AsyncGenerator[Dict, None]:
+        """生成回复
+        
+        参数:
+            messages: 消息列表
+            model: 模型名称或配置
+            provider: 提供者名称或配置
+            temperature: 温度参数
+            top_p: top_p参数
+            stream: 是否流式响应
+            user_id: 用户ID
+            session_id: 会话ID
+            role_id: 角色ID
+            role_info: 角色信息
+            system_prompt: 系统提示，将覆盖role_info中的system_prompt
+            
+        返回:
+            生成的回复
+        """
+        try:
+            # 确保role_info是字典类型
+            if role_info is None:
+                role_info = {}
+            elif not isinstance(role_info, dict):
+                logger.warning(f"role_info不是字典类型，而是{type(role_info)}，将使用空字典替代")
+                role_info = {}
+                
+            # 如果提供了系统提示，则覆盖角色中的系统提示
+            if system_prompt:
+                if not role_info:
+                    role_info = {}
+                role_info["system_prompt"] = system_prompt
+                
+            # 检查模型和提供者
+            model_config = await self._get_model_config(model, provider)
+            if not model_config:
+                error_message = f"未找到有效的模型配置：model={model}, provider={provider}"
+                logger.error(error_message)
+                yield {"type": "error", "content": error_message}
+                return
+                
+            # 准备消息
+            processed_messages = await self._prepare_messages_with_role_info(
+                messages=messages,
+                role_id=role_id,
+                role_info=role_info,
+                session_id=session_id,
+                user_id=user_id,
+            )
+            
+            # 获取模型提供者和名称
+            model_name = model_config["model_name"]
+            provider_name = model_config["provider"]
+            
+            # 生成回复
+            if stream:
+                async for chunk in self.llm_service.generate_stream(
+                    messages=processed_messages,
+                ):
+                    # 检查chunk是否为复杂对象，如果是则提取其文本内容
+                    if hasattr(chunk, 'content'):
+                        content = chunk.content
+                    elif hasattr(chunk, 'text'):
+                        content = chunk.text
+                    elif isinstance(chunk, str):
+                        content = chunk
+                    else:
+                        # 尝试转换为字符串
+                        content = str(chunk)
+                        
+                    yield {"type": "content", "content": content}
+            else:
+                response = await self.llm_service.generate(
+                    messages=processed_messages,
+                )
+                
+                # 同样处理非流式响应
+                if hasattr(response, 'content'):
+                    content = response.content
+                elif hasattr(response, 'text'):
+                    content = response.text
+                elif isinstance(response, str):
+                    content = response
+                else:
+                    content = str(response)
+                    
+                yield {"type": "content", "content": content}
                 
         except Exception as e:
-            logger.error(f"LLM生成回复时出错: {str(e)}")
-            yield f"生成回复时出错: {str(e)}"
-
+            error_message = f"生成回复时出错: {str(e)}"
+            logger.error(error_message)
+            logger.exception(e)
+            yield {"type": "error", "content": error_message}
+    
     async def _retrieve_knowledge(self, query: str) -> AsyncGenerator[Dict, None]:
         """流式检索相关知识
         
@@ -1708,121 +1619,111 @@ Answer:"""
         
         return messages
     
-    async def _prepare_messages_with_role_info(self, messages: List[dict], role_id: str, role_info: Dict[str, Any] = None, session_id: str = None) -> List[dict]:
+    async def _prepare_messages_with_role_info(
+        self, 
+        messages: List[dict], 
+        role_id: str, 
+        role_info: Dict[str, Any] = None, 
+        session_id: str = None,
+        user_id: str = None
+    ) -> List[dict]:
         """
-        使用预先获取的角色信息准备消息列表
+        Prepare a list of messages by using role information
         
         Args:
-            messages: 消息列表
-            role_id: 角色ID
-            role_info: 预先获取的角色信息（如果为None则会查询数据库）
+            messages: List of messages
+            role_id: Role ID
+            role_info: Role information, default is None
+            session_id: Session ID, default is None
+            user_id: User ID, default is None
             
         Returns:
-            更新后的消息列表
+            Updated list of messages
         """
-        # 确保服务已初始化
-        await self._ensure_initialized()
-        
-        # 如果没有提供角色信息且有角色ID，获取角色信息
-        if not role_info and role_id:
-            role_info = await self.get_role_info(session_id, role_id)
+        # 确保role_info是字典类型
+        if role_info is None:
+            role_info = {}
+        elif not isinstance(role_info, dict):
+            logger.warning(f"role_info不是字典类型，而是{type(role_info)}，将使用空字典替代")
+            role_info = {}
             
-        if not role_info:
-            logger.warning(f"未找到角色信息，使用原始消息: {role_id}")
-            return messages
-        
-        # 构建完整的消息列表
-        complete_messages = []
-        
-        # 添加系统消息
-        complete_messages.append({"role": "system", "content": role_info.get("system_prompt", "你是一个助手，请根据用户的问题提供有用的回答。")})
-        
-        # 获取历史消息（如果有会话ID和用户ID）
-        if role_id:
+        # 确保服务已初始化
+        if not self.initialized:
+            await self.initialize()
+
+        # 获取历史消息
+        processed_messages = []  # 创建一个新列表存储处理后的消息
+        if session_id and user_id:
             try:
-                # 检查会话是否存在
-                session_exists = await self.verify_session_exists(role_id, role_id)
+                # 验证会话是否存在
+                session_exists = await self.verify_session_exists(session_id, user_id)
                 if not session_exists:
-                    logger.warning(f"会话 {role_id} 不存在，跳过历史消息加载")
+                    logging.warning(f"Session {session_id} does not exist for user {user_id}")
                 else:
-                    logger.info(f"开始获取会话 {role_id} 的历史消息")
+                    # 获取 Redis 中的历史消息
+                    redis_key = f"messages:{user_id}:{session_id}"
+                    redis_messages = await self.redis.lrange(redis_key, 0, -1)
+                    logger.info(f"从Redis获取到 {len(redis_messages)} 条消息")
                     
-                    # 使用 CustomSession 获取会话信息
-                    session_data = await CustomSession.get_session_by_id(role_id)
-                    logger.info(f"获取会话数据: {session_data is not None}")
+                    history = []
                     
-                    if session_data:
-                        # 构建Redis消息键
-                        redis_key = f"messages:{role_id}:{role_id}"
-                        logger.info(f"准备从Redis获取消息，键名: {redis_key}")
+                    # 解析消息记录
+                    for msg_data in redis_messages:
+                        try:
+                            msg = json.loads(msg_data)
+                            if msg.get("role") in ["user", "assistant", "system"]:
+                                history.append(msg)
+                        except json.JSONDecodeError:
+                            logger.warning(f"解析消息失败: {msg_data[:100]}")
+                            continue
                         
-                        # 从内存管理器获取Redis客户端
-                        from app.memory.memory_manager import get_memory_manager
-                        memory_manager = await get_memory_manager()
-                        
-                        if memory_manager and memory_manager.short_term_memory and memory_manager.short_term_memory.redis:
-                            redis_client = memory_manager.short_term_memory.redis
-                            
-                            # 检查消息键是否存在
-                            key_exists = await redis_client.exists(redis_key)
-                            logger.info(f"Redis消息键 {redis_key} 存在: {key_exists}")
-                    
-                            if key_exists:
-                                # 获取消息记录
-                                messages_data = await redis_client.lrange(redis_key, 0, -1)
-                                logger.info(f"从Redis获取到 {len(messages_data)} 条消息")
-                                
-                                history = []
-                                
-                                # 解析消息记录
-                                for msg_data in messages_data:
-                                    try:
-                                        msg = json.loads(msg_data)
-                                        if msg.get("role") in ["user", "assistant", "system"]:
-                                            history.append(msg)
-                                    except json.JSONDecodeError:
-                                        logger.warning(f"解析消息失败: {msg_data[:100]}")
-                                        continue
-                                    
-                                # 将历史消息添加到完整消息列表中
-                                logger.info(f"成功解析 {len(history)} 条有效历史消息")
-                                for msg in history:
-                                    complete_messages.append({
-                                        "role": msg.get("role", "user"),
-                                        "content": msg.get("content", "")
-                                    })
-                            else:
-                                logger.warning(f"Redis中不存在消息键 {redis_key}")
-                        else:
-                            logger.warning("Redis客户端不可用，无法获取历史消息")
-                    else:
-                        logger.warning(f"在MongoDB中找不到会话 {role_id}")
+                    # 将历史消息添加到处理后的消息列表中
+                    logger.info(f"成功解析 {len(history)} 条有效历史消息")
+                    for msg in history:
+                        processed_messages.append({
+                            "role": msg.get("role", "user"),
+                            "content": msg.get("content", "")
+                        })
             except Exception as e:
                 logger.error(f"获取历史消息出错: {str(e)}", exc_info=True)
                 # 如果获取历史消息失败，继续处理但记录错误
         
         # 添加当前消息
         for msg in messages:
-            complete_messages.append({
+            processed_messages.append({
                 "role": msg.get("role", "user"),
                 "content": msg.get("content", "")
             })
         
+        # 构建完整的消息列表
+        complete_messages = []
+        
+        # 添加系统消息
+        system_prompt = "你是一个助手，请根据用户的问题提供有用的回答。"
+        if isinstance(role_info, dict):
+            system_prompt = role_info.get("system_prompt", system_prompt)
+            
+        complete_messages.append({"role": "system", "content": system_prompt})
+        
+        # 添加历史消息和当前消息
+        complete_messages.extend(processed_messages)
+        
         return complete_messages
 
-    async def _prepare_messages(self, messages: List[dict], role_id: str) -> List[dict]:
+    async def _prepare_messages(self, messages: List[dict], role_id: str, user_id: str = None) -> List[dict]:
         """
         Prepare messages for the LLM
         
         Args:
             messages: List of messages
             role_id: Used role ID
+            user_id: User ID (optional)
             
         Returns:
             Updated list of messages
         """
         # 为保持兼容性，调用新的实现
-        return await self._prepare_messages_with_role_info(messages, role_id, None, role_id) 
+        return await self._prepare_messages_with_role_info(messages, role_id, None, role_id, user_id)
 
     def _build_role_aware_rag_prompt(self, context: str, role_info: Dict) -> str:
         """构建保持角色风格的RAG提示模板
@@ -1834,6 +1735,13 @@ Answer:"""
         返回:
             增强后的提示模板
         """
+        # 确保role_info是字典类型
+        if role_info is None:
+            role_info = {}
+        elif not isinstance(role_info, dict):
+            logger.warning(f"role_info不是字典类型，而是{type(role_info)}，将使用空字典替代")
+            role_info = {}
+            
         role_name = role_info.get("name", "助手")
         personality = role_info.get("personality", "")
         speech_style = role_info.get("speech_style", "")

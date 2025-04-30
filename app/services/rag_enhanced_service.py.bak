@@ -62,8 +62,8 @@ class RAGEnhancedService:
         
         # 保留兼容性的配置
         retrieval_key = config.RETRIEVAL_API_KEY
-        if retrieval_key and not retrieval_key.startswith("ragflow-"):
-            retrieval_key = f"ragflow-{retrieval_key.strip()}"
+        if retrieval_key and not retrieval_key.startswith("skragflow-"):
+            retrieval_key = f"skragflow-{retrieval_key.strip()}"
             
         self.retrieval_url = config.RETRIEVAL_SERVICE_URL
         self.api_key = retrieval_key
@@ -153,9 +153,9 @@ class RAGEnhancedService:
         else:
             # 确保API密钥格式正确
             api_key = self.api_key.strip()
-            if not api_key.startswith("ragflow-"):
+            if not api_key.startswith("skragflow-"):
                 self.logger.warning("知识库检索API密钥不是以skragflow-开头，自动添加前缀")
-                self.api_key = f"ragflow-{api_key}"
+                self.api_key = f"skragflow-{api_key}"
         
         # 确保 default_provider 属性存在，不存在则设置默认值
         if not hasattr(self, 'default_provider') or not self.default_provider:
@@ -697,11 +697,6 @@ Answer:"""
                 if result["type"] == "document":
                     # 收集文档，但不传递给客户端(这是内部类型)
                     documents.append(result["content"])
-                elif result["type"] == "reference_chunk":
-                    # 收集引用内容，同时将其添加到文档中
-                    documents.append(result["content"])
-                    # 传递给客户端
-                    yield result
                 else:
                     # 传递所有其他思考过程事件
                     yield result
@@ -1288,261 +1283,226 @@ Answer:"""
             yield {"type": "error", "content": error_message}
     
     async def _retrieve_knowledge(self, query: str, rag_interface: str = None) -> AsyncGenerator[Dict, None]:
-        """获取相关知识
-
+        """
+        从知识库检索相关信息
+        
         参数:
-            query: 查询文本
-            rag_interface: 指定的RAG接口
-
+            query: 用户查询
+            rag_interface: 使用的RAG接口名称，如果为None则使用默认接口
+            
         返回:
-            生成器，产生知识条目
+            检索结果的异步生成器
         """
         try:
-            # 构建请求
-            url, headers, payload = self._prepare_retrieval_request(query, rag_interface)
-            self.logger.info(f"准备向检索服务发送请求，URL: {url}")
-            self.logger.debug(f"请求头: {headers}")
-            self.logger.debug(f"请求载荷: {payload}")
+            # 添加日志记录传入的参数
+            self.logger.info(f"_retrieve_knowledge 调用: query={query}, rag_interface={rag_interface}")
             
-            async with httpx.AsyncClient(timeout=60.0) as client:
-                # 发送请求
-                start_time = time.time()
-                self.logger.info(f"开始发送检索请求...")
-                
-                response = await client.post(
-                    url,
-                    headers=headers,
-                    json=payload,
-                    timeout=60.0
+            # 获取RAG接口配置
+            interface_config = None
+            if hasattr(self.app_config, 'get_rag_interface'):
+                self.logger.debug(f"使用 app_config.get_rag_interface 获取接口配置, DEFAULT_RAG_INTERFACE={self.app_config.DEFAULT_RAG_INTERFACE}")
+                interface_config = self.app_config.get_rag_interface(rag_interface)
+                if interface_config is None:
+                    self.logger.error(f"获取到的RAG接口配置为None！rag_interface={rag_interface}")
+                    yield {
+                        "type": "error", 
+                        "content": f"获取RAG接口配置失败，接口名称: {rag_interface}"
+                    }
+                    return
+                self.logger.info(f"获取到RAG接口配置: interface_name={interface_config.name}, dataset_ids={interface_config.dataset_ids}")
+            else:
+                # 兼容处理：如果app_config没有get_rag_interface方法，则创建一个默认配置
+                from app.services.rag_interface_config import RagInterfaceConfig
+                self.logger.warning("Config对象没有get_rag_interface方法，使用默认配置")
+                # 导入os模块获取环境变量
+                import os
+                # 获取默认数据集ID
+                default_dataset_id = os.getenv("DEFAULT_DATASET_ID", "default_dataset")
+                self.logger.info(f"使用环境变量中的默认数据集ID: {default_dataset_id}")
+                interface_config = RagInterfaceConfig(
+                    name="default",
+                    base_url=self.app_config.RETRIEVAL_SERVICE_URL.replace("/api/chat", ""),
+                    api_key=self.app_config.RETRIEVAL_API_KEY,
+                    dataset_ids=[default_dataset_id],  # 使用默认数据集ID
+                    document_ids=[]
                 )
                 
-                # 记录响应时间
-                elapsed_time = time.time() - start_time
-                self.logger.info(f"检索响应时间: {elapsed_time:.2f}秒")
-                
-                # 检查响应状态码
-                if response.status_code == 401:
-                    self.logger.error(f"检索API认证失败 (401 Unauthorized): {response.text}")
-                    yield {"type": "error", "message": "知识库访问权限验证失败"}
-                    return
-                
-                if response.status_code != 200:
-                    self.logger.error(f"检索API请求失败 (HTTP {response.status_code}): {response.text}")
-                    yield {"type": "error", "message": f"知识库请求失败: HTTP {response.status_code}"}
-                    return
-                
-                # 记录原始响应
-                self.logger.info(f"接收到响应，状态码: {response.status_code}")
-                self.logger.debug(f"检索服务原始响应: {response.text[:500]}...")
-                
-                try:
-                    # 记录关键调试信息
-                    self.logger.info(f"开始解析JSON响应...")
-                    
-                    # 解析JSON响应
-                    response_text = response.text
-                    self.logger.debug(f"响应文本类型: {type(response_text)}")
-                    
-                    # 使用json.loads而不是response.json()以便更好地控制错误处理
-                    response_data = json.loads(response_text)
-                    
-                    # 详细记录响应数据类型和内容
-                    self.logger.info(f"响应数据类型: {type(response_data)}")
-                    self.logger.debug(f"响应数据内容: {str(response_data)[:200]}...")
-                    
-                    # 类型检查
-                    if not isinstance(response_data, dict):
-                        self.logger.error(f"错误: 响应数据不是字典类型! 实际类型: {type(response_data)}")
-                        yield {"type": "error", "message": "知识库返回了非预期的数据格式"}
-                        return
-                    
-                    # 安全地获取code并记录
-                    if "code" not in response_data:
-                        self.logger.error("响应数据中缺少'code'字段")
-                        response_code = None
-                    else:
-                        response_code = response_data["code"]
-                        self.logger.info(f"响应代码: {response_code}")
-                    
-                    # 检查响应状态码
-                    if response_code != 0:
-                        error_msg = response_data.get("msg", "未知错误")
-                        self.logger.error(f"检索服务返回错误代码 {response_code}: {error_msg}")
-                        yield {"type": "error", "message": f"知识库返回错误: {error_msg}"}
-                        return
-                    
-                    # 检查data字段
-                    if "data" not in response_data:
-                        self.logger.error("响应数据中缺少'data'字段")
-                        yield {"type": "error", "message": "知识库返回的数据结构缺少必要字段"}
-                        return
-                    
-                    # 类型检查data字段
-                    data_field = response_data["data"]
-                    self.logger.info(f"data字段类型: {type(data_field)}")
-                    
-                    if not isinstance(data_field, dict):
-                        self.logger.error(f"data字段不是字典类型! 实际类型: {type(data_field)}")
-                        yield {"type": "error", "message": "知识库返回了非预期的数据格式"}
-                        return
-                    
-                    # 检查chunks字段
-                    if "chunks" not in data_field:
-                        self.logger.error("data字段中缺少'chunks'字段")
-                        yield {"type": "error", "message": "知识库返回的数据结构缺少必要字段"}
-                        return
-                    
-                    # 类型检查chunks字段
-                    chunks_field = data_field["chunks"]
-                    self.logger.info(f"chunks字段类型: {type(chunks_field)}")
-                    
-                    if not isinstance(chunks_field, list):
-                        self.logger.error(f"chunks字段不是列表类型! 实际类型: {type(chunks_field)}")
-                        yield {"type": "error", "message": "知识库返回了非预期的数据格式"}
-                        return
-                    
-                    # 处理检索结果
-                    self.logger.info(f"成功检索到 {len(chunks_field)} 个结果块")
-                    
-                    for chunk in chunks_field:
-                        # 类型检查每个chunk
-                        if not isinstance(chunk, dict):
-                            self.logger.warning(f"跳过非字典类型的检索结果: {type(chunk)}")
-                            continue
-                        
-                        # 记录每个chunk的内容
-                        self.logger.debug(f"处理检索结果块: {str(chunk)[:100]}...")
-                        
-                        yield {
-                            "type": "chunk",
-                            "content": chunk.get("content", ""),
-                            "source": chunk.get("source", "未知来源"),
-                            "score": chunk.get("score", 0),
-                            "metadata": chunk.get("metadata", {}),
-                        }
-                    
-                except json.JSONDecodeError as e:
-                    self.logger.error(f"JSON解析错误: {str(e)}")
-                    self.logger.error(f"无法解析的响应文本: {response.text[:200]}...")
-                    yield {"type": "error", "message": "知识库返回了无效的数据格式"}
-                    return
-                
-                except Exception as e:
-                    self.logger.error(f"处理检索响应时发生异常: {str(e)}")
-                    self.logger.error(traceback.format_exc())
-                    yield {"type": "error", "message": f"处理知识库响应时出错: {str(e)}"}
-                    return
-                
-        except httpx.TimeoutException:
-            self.logger.error("检索请求超时")
-            yield {"type": "error", "message": "知识库请求超时"}
+            # 再次验证接口配置不为空
+            if interface_config is None:
+                self.logger.error("无法获取有效的RAG接口配置！")
+                yield {
+                    "type": "error", 
+                    "content": "无法获取有效的RAG接口配置"
+                }
+                return
             
-        except httpx.RequestError as e:
-            self.logger.error(f"检索请求错误: {str(e)}")
-            yield {"type": "error", "message": f"知识库请求错误: {str(e)}"}
+            # 准备请求URL
+            retrieval_url = f"{interface_config.base_url}/api/v1/retrieval"
             
+            # 准备API密钥
+            api_key = interface_config.api_key
+            if api_key and not api_key.startswith("skragflow-"):
+                api_key = f"skragflow-{api_key.strip()}"
+            
+            # 记录调试信息
+            if self.debug_mode:
+                self.logger.debug(f"使用RAG接口: {interface_config.name}")
+                self.logger.debug(f"检索URL: {retrieval_url}")
+                self.logger.debug(f"API密钥前缀: {api_key[:10] if api_key else 'None'}...")
+        
+            # 准备请求头
+            headers = {
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {api_key}"
+            }
+            
+            # 准备请求体
+            payload = {
+                "question": query,
+                "similarity_threshold": 0.5,
+                "vector_similarity_weight": 0.8,
+                "top_k": 1024,
+                "keyword": False,
+                "highlight": True
+            }
+            
+            # 添加详细日志检查dataset_ids状态
+            self.logger.info(f"检查dataset_ids: {interface_config.dataset_ids}")
+            
+            # 如果配置了数据集ID，添加到请求中
+            if interface_config.dataset_ids:
+                payload["dataset_ids"] = interface_config.dataset_ids
+                self.logger.info(f"已添加dataset_ids到payload: {interface_config.dataset_ids}")
+            else:
+                # 缺少必要的dataset_ids参数
+                self.logger.error("检索请求缺少必要的dataset_ids参数")
+                # 记录环境变量状态以便调试
+                import os
+                self.logger.error(f"当前环境变量: DEFAULT_DATASET_ID={os.getenv('DEFAULT_DATASET_ID')}, SECONDARY_RAG_DATASET_IDS={os.getenv('SECONDARY_RAG_DATASET_IDS')}")
+                yield {
+                    "type": "error", 
+                    "content": "检索请求缺少必要的dataset_ids参数，请在.env文件中设置SECONDARY_RAG_DATASET_IDS环境变量"
+                }
+                return
+                
+            # 如果配置了文档ID，添加到请求中
+            if interface_config.document_ids:
+                payload["document_ids"] = interface_config.document_ids
+            
+            # 准备用于跟踪响应处理状态的变量
+            chunk_counter = 0
+            total_chunks = 0
+            stream_buffer = []
+            
+            try:
+                self.logger.info(f"发送检索请求到 {retrieval_url}")
+                
+                async with httpx.AsyncClient(timeout=60.0) as client:
+                    # 发送请求
+                    start_time = time.time()
+                    
+                    async with client.stream(
+                        "POST",
+                        retrieval_url,
+                        headers=headers,
+                        json=payload,
+                        timeout=60.0  # 设置长超时时间
+                    ) as response:
+                        if response.status_code == 401:
+                            self.logger.error(f"检索API认证失败 (401 Unauthorized): {await response.text()}")
+                            yield {
+                                "type": "error", 
+                                "content": f"检索API认证失败，请检查API密钥: {api_key[:5]}..."
+                            }
+                            return
+                        
+                        if response.status_code != 200:
+                            error_text = await response.text()
+                            self.logger.error(f"检索API请求失败 (HTTP {response.status_code}): {error_text}")
+                            yield {
+                                "type": "error", 
+                                "content": f"检索服务请求失败 (HTTP {response.status_code}): {error_text}"
+                            }
+                            return
+                        
+                        # 解析响应JSON
+                        try:
+                            await response.aread()  # 读取完整响应内容
+                            response_data = response.json()
+                            
+                            # 检查响应状态码
+                            if not response_data.get("code") == 0:
+                                error_msg = response_data.get("msg", "未知错误")
+                                self.logger.error(f"检索服务返回错误: {error_msg}")
+                                yield {"type": "error", "content": f"检索服务返回错误: {error_msg}"}
+                                return
+                            
+                            # 提取检索结果
+                            chunks = []
+                            if "data" in response_data and "chunks" in response_data["data"]:
+                                chunks = response_data["data"]["chunks"]
+                                total_chunks = len(chunks)
+                            
+                            # 模拟流式处理
+                            self.logger.info(f"检索到 {total_chunks} 个结果块")
+                            
+                            if not chunks:
+                                yield {"type": "info", "content": "没有找到相关信息"}
+                                return
+                            
+                            # 发送引用开始标记
+                            yield {"type": "references_start", "count": total_chunks}
+                            
+                            # 处理每个chunk
+                            for chunk in chunks:
+                                chunk_counter += 1
+                                
+                                # 创建结构化chunk对象
+                                chunk_obj = {
+                                    "type": "reference_chunk",
+                                    "chunk_index": chunk_counter,
+                                    "total_chunks": total_chunks,
+                                    "content": chunk.get("highlight", chunk.get("content", "无内容")),
+                                    "document_name": chunk.get("document_keyword", "未知文档"),
+                                    "document_id": chunk.get("document_id", ""),
+                                    "chunk_id": chunk.get("id", ""),
+                                    "similarity": chunk.get("similarity", 0),
+                                    "metadata": {
+                                        "document_id": chunk.get("document_id", ""),
+                                        "chunk_id": chunk.get("id", ""),
+                                        "chunk_index": chunk.get("chunk_index", -1),
+                                        "dataset_id": chunk.get("dataset_id", "")
+                                    }
+                                }
+                                
+                                yield chunk_obj
+                            
+                            # 发送引用结束标记
+                            yield {"type": "references_end", "count": total_chunks}
+                            
+                        except json.JSONDecodeError:
+                            error_text = await response.text()
+                            self.logger.error(f"无法解析检索API响应: {error_text}")
+                            yield {"type": "error", "content": "检索服务返回了无效的JSON数据"}
+                            
+            except httpx.TimeoutException:
+                self.logger.error("检索请求超时")
+                yield {"type": "error", "content": "检索请求超时，请稍后再试"}
+                
+            except httpx.RequestError as e:
+                self.logger.error(f"检索请求错误: {str(e)}")
+                yield {"type": "error", "content": f"检索服务连接错误: {str(e)}"}
+                
+            except Exception as e:
+                self.logger.error(f"检索过程中发生异常: {str(e)}")
+                self.logger.error(traceback.format_exc())
+                yield {"type": "error", "content": f"检索过程中发生错误: {str(e)}"}
+        
         except Exception as e:
             self.logger.error(f"检索过程中发生异常: {str(e)}")
             self.logger.error(traceback.format_exc())
-            yield {"type": "error", "message": f"知识库检索错误: {str(e)}"}
-
-    def _prepare_retrieval_request(self, query: str, rag_interface: str = None) -> Tuple[str, Dict, Dict]:
-        """准备检索请求的URL、头信息和载荷
-        
-        参数:
-            query: 查询文本
-            rag_interface: 指定的RAG接口名称
-            
-        返回:
-            (url, headers, payload)元组
-        """
-        # 添加日志记录传入的参数
-        self.logger.info(f"准备检索请求: query={query}, rag_interface={rag_interface}")
-        
-        # 获取RAG接口配置
-        interface_config = None
-        if hasattr(self.app_config, 'get_rag_interface'):
-            self.logger.debug(f"使用app_config.get_rag_interface获取接口配置")
-            interface_config = self.app_config.get_rag_interface(rag_interface)
-            if interface_config is None:
-                self.logger.error(f"获取到的RAG接口配置为None！rag_interface={rag_interface}")
-                raise ValueError(f"获取RAG接口配置失败，接口名称: {rag_interface}")
-            self.logger.info(f"获取到RAG接口配置: interface_name={interface_config.name}")
-        else:
-            # 兼容处理：如果app_config没有get_rag_interface方法，则创建一个默认配置
-            from app.services.rag_interface_config import RagInterfaceConfig
-            self.logger.warning("Config对象没有get_rag_interface方法，使用默认配置")
-            # 导入os模块获取环境变量
-            import os
-            # 获取默认数据集ID
-            default_dataset_id = os.getenv("DEFAULT_DATASET_ID", "default_dataset")
-            self.logger.info(f"使用环境变量中的默认数据集ID: {default_dataset_id}")
-            interface_config = RagInterfaceConfig(
-                name="default",
-                base_url=self.app_config.RETRIEVAL_SERVICE_URL.replace("/api/chat", ""),
-                api_key=self.app_config.RETRIEVAL_API_KEY,
-                dataset_ids=[default_dataset_id],  # 使用默认数据集ID
-                document_ids=[]
-            )
-            
-        # 再次验证接口配置不为空
-        if interface_config is None:
-            self.logger.error("无法获取有效的RAG接口配置！")
-            raise ValueError("无法获取有效的RAG接口配置")
-        
-        # 准备请求URL
-        retrieval_url = f"{interface_config.base_url}/api/v1/retrieval"
-        
-        # 准备API密钥
-        api_key = interface_config.api_key
-        if api_key and not api_key.startswith("ragflow-"):
-            api_key = f"ragflow-{api_key.strip()}"
-        
-        # 记录调试信息
-        if self.debug_mode:
-            self.logger.debug(f"使用RAG接口: {interface_config.name}")
-            self.logger.debug(f"检索URL: {retrieval_url}")
-            self.logger.debug(f"API密钥前缀: {api_key[:10] if api_key else 'None'}...")
+            yield {"type": "error", "content": f"检索过程中发生错误: {str(e)}"}
     
-        # 准备请求头
-        headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {api_key}"
-        }
-        
-        # 准备请求体
-        payload = {
-            "question": query,
-            "page": 1,                     # 添加页码参数
-            "page_size": 30,               # 添加每页大小参数
-            "similarity_threshold": 0.5,
-            "vector_similarity_weight": 0.8,
-            "top_k": 1024,
-            "keyword": False,
-            "highlight": True
-        }
-        
-        # 添加详细日志检查dataset_ids状态
-        self.logger.info(f"检查dataset_ids: {interface_config.dataset_ids}")
-        
-        # 如果配置了数据集ID，添加到请求中
-        if interface_config.dataset_ids:
-            payload["dataset_ids"] = interface_config.dataset_ids
-            self.logger.info(f"已添加dataset_ids到payload: {interface_config.dataset_ids}")
-        else:
-            # 缺少必要的dataset_ids参数
-            self.logger.error("检索请求缺少必要的dataset_ids参数")
-            # 记录环境变量状态以便调试
-            import os
-            self.logger.error(f"当前环境变量: DEFAULT_DATASET_ID={os.getenv('DEFAULT_DATASET_ID')}, SECONDARY_RAG_DATASET_IDS={os.getenv('SECONDARY_RAG_DATASET_IDS')}")
-            raise ValueError("检索请求缺少必要的dataset_ids参数，请在.env文件中设置SECONDARY_RAG_DATASET_IDS环境变量")
-            
-        # 如果配置了文档ID，添加到请求中
-        if interface_config.document_ids:
-            payload["document_ids"] = interface_config.document_ids
-            
-        return retrieval_url, headers, payload
-
     async def _retrieve_knowledge_silent(self, query: str, rag_interface: str = None) -> List[Dict]:
         """
         从知识库检索相关信息 (无流式返回)
@@ -1555,139 +1515,155 @@ Answer:"""
             检索结果列表
         """
         try:
-            # 准备请求
-            url, headers, payload = self._prepare_retrieval_request(query, rag_interface)
-            self.logger.info(f"准备静默检索请求，URL: {url}")
-            
-            # 发送请求并获取结果
-            return await self._send_retrieval_request(url, headers, payload)
-            
-        except Exception as e:
-            self.logger.error(f"静默检索过程中发生异常: {str(e)}")
-            self.logger.error(traceback.format_exc())
-            return []
-
-    async def _send_retrieval_request(self, url: str, headers: Dict, payload: Dict) -> List[Dict]:
-        """发送检索请求并处理响应"""
-        try:
-            async with httpx.AsyncClient(timeout=60.0) as client:
-                # 发送请求
-                start_time = time.time()
-                self.logger.info(f"开始发送检索请求到: {url}")
-                
-                response = await client.post(
-                    url,
-                    headers=headers,
-                    json=payload,
-                    timeout=60.0
+            # 获取RAG接口配置
+            interface_config = None
+            if hasattr(self.app_config, 'get_rag_interface'):
+                interface_config = self.app_config.get_rag_interface(rag_interface)
+            else:
+                # 兼容处理：如果app_config没有get_rag_interface方法，则创建一个默认配置
+                from app.services.rag_interface_config import RagInterfaceConfig
+                self.logger.warning("Config对象没有get_rag_interface方法，使用默认配置")
+                interface_config = RagInterfaceConfig(
+                    name="default",
+                    base_url=self.app_config.RETRIEVAL_SERVICE_URL.replace("/api/chat", ""),
+                    api_key=self.app_config.RETRIEVAL_API_KEY,
+                    dataset_ids=[],
+                    document_ids=[]
                 )
+        
+            # 准备请求URL
+            retrieval_url = f"{interface_config.base_url}/api/v1/retrieval"
+        
+            # 准备API密钥
+            api_key = interface_config.api_key
+            if api_key and not api_key.startswith("skragflow-"):
+                api_key = f"skragflow-{api_key.strip()}"
+            
+            # 记录调试信息
+            if self.debug_mode:
+                self.logger.debug(f"使用RAG接口: {interface_config.name}")
+                self.logger.debug(f"检索URL: {retrieval_url}")
+                self.logger.debug(f"API密钥前缀: {api_key[:10] if api_key else 'None'}...")
+        
+            # 准备请求头
+            headers = {
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {api_key}"
+            }
+            
+            # 准备请求体
+            payload = {
+                "question": query,
+                "similarity_threshold": 0.5,
+                "vector_similarity_weight": 0.8,
+                "top_k": 1024,
+                "keyword": False,
+                "highlight": True
+            }
+            
+            # 如果配置了数据集ID，添加到请求中
+            if interface_config.dataset_ids:
+                payload["dataset_ids"] = interface_config.dataset_ids
+            else:
+                # 缺少必要的dataset_ids参数
+                self.logger.error("检索请求缺少必要的dataset_ids参数")
+                return []
                 
-                # 记录响应时间
-                elapsed_time = time.time() - start_time
-                self.logger.info(f"检索响应时间: {elapsed_time:.2f}秒")
+            # 如果配置了文档ID，添加到请求中
+            if interface_config.document_ids:
+                payload["document_ids"] = interface_config.document_ids
+            
+            # 准备结果存储
+            results = []
+            
+            try:
+                self.logger.info(f"发送无流式检索请求到 {retrieval_url}")
                 
-                # 记录状态码
-                self.logger.info(f"检索响应状态码: {response.status_code}")
-                
-                # 检查响应状态码
-                if response.status_code == 401:
-                    self.logger.error(f"检索API认证失败 (401 Unauthorized): {response.text}")
-                    return []
-                
-                if response.status_code != 200:
-                    self.logger.error(f"检索API请求失败 (HTTP {response.status_code}): {response.text}")
-                    return []
-                
-                # 记录原始响应
-                self.logger.debug(f"检索服务原始响应: {response.text[:200]}...")
-                
-                try:
-                    # 记录响应文本类型
-                    response_text = response.text
-                    self.logger.debug(f"响应文本类型: {type(response_text)}, 长度: {len(response_text)}")
+                async with httpx.AsyncClient(timeout=30.0) as client:
+                    # 发送请求
+                    start_time = time.time()
+                    response = await client.post(
+                        retrieval_url,
+                        headers=headers,
+                        json=payload,
+                        timeout=30.0
+                    )
                     
-                    # 解析JSON响应前记录
-                    self.logger.info(f"开始解析JSON响应...")
+                    process_time = time.time() - start_time
+                    self.logger.info(f"检索请求处理时间: {process_time:.2f}秒")
                     
-                    # 解析JSON响应
+                    if response.status_code == 401:
+                        self.logger.error(f"检索API认证失败 (401 Unauthorized): {response.text}")
+                        return []
+                    
+                    if response.status_code != 200:
+                        self.logger.error(f"检索API请求失败 (HTTP {response.status_code}): {response.text}")
+                        return []
+                    
+                    # 解析响应JSON
                     try:
-                        response_data = json.loads(response_text)
-                    except json.JSONDecodeError as e:
-                        self.logger.error(f"JSON解析错误: {str(e)}")
-                        self.logger.error(f"无法解析的响应文本: {response_text[:500]}...")
+                        response_data = response.json()
+                        
+                        # 检查响应状态码
+                        if not response_data.get("code") == 0:
+                            error_msg = response_data.get("msg", "未知错误")
+                            self.logger.error(f"检索服务返回错误: {error_msg}")
+                            return []
+                        
+                        # 提取检索结果
+                        chunks = []
+                        if "data" in response_data and "chunks" in response_data["data"]:
+                            chunks = response_data["data"]["chunks"]
+                        
+                        total_chunks = len(chunks)
+                        self.logger.info(f"无流式检索到 {total_chunks} 个结果块")
+                        
+                        if not chunks:
+                            self.logger.info("没有找到相关信息")
+                            return []
+                        
+                        # 处理每个chunk
+                        for i, chunk in enumerate(chunks, 1):
+                            # 创建结构化chunk对象
+                            chunk_obj = {
+                                "content": chunk.get("highlight", chunk.get("content", "无内容")),
+                                "document_name": chunk.get("document_keyword", "未知文档"),
+                                "document_id": chunk.get("document_id", ""),
+                                "chunk_id": chunk.get("id", ""),
+                                "similarity": chunk.get("similarity", 0),
+                                "chunk_index": i,
+                                "total_chunks": total_chunks,
+                                "metadata": {
+                                    "document_id": chunk.get("document_id", ""),
+                                    "chunk_id": chunk.get("id", ""),
+                                    "chunk_index": chunk.get("chunk_index", -1),
+                                    "dataset_id": chunk.get("dataset_id", "")
+                                }
+                            }
+                            
+                            results.append(chunk_obj)
+                        
+                        return results
+                        
+                    except json.JSONDecodeError:
+                        self.logger.error(f"无法解析检索API响应: {response.text}")
                         return []
                     
-                    # 详细记录响应数据
-                    self.logger.info(f"检索服务响应类型: {type(response_data)}")
-                    self.logger.debug(f"响应数据: {str(response_data)[:300]}...")
-                    
-                    # 添加类型检查
-                    if not isinstance(response_data, dict):
-                        self.logger.error(f"错误: 响应数据不是字典类型! 实际类型: {type(response_data)}, 值: {str(response_data)[:200]}...")
-                        return []
-                    
-                    # 安全地检查code字段
-                    if "code" not in response_data:
-                        self.logger.error("响应数据中缺少'code'字段")
-                        return []
-                    
-                    # 检查响应状态码
-                    response_code = response_data["code"]
-                    self.logger.debug(f"响应状态码: {response_code}")
-                    
-                    if response_code != 0:
-                        error_msg = response_data.get("msg", "未知错误")
-                        self.logger.error(f"检索服务返回错误: {error_msg}")
-                        return []
-                    
-                    # 检查data字段是否存在
-                    if "data" not in response_data:
-                        self.logger.error("响应数据中缺少'data'字段")
-                        return []
-                    
-                    # 检查data字段类型
-                    data_field = response_data["data"]
-                    self.logger.debug(f"data字段类型: {type(data_field)}")
-                    
-                    if not isinstance(data_field, dict):
-                        self.logger.error(f"data字段不是字典类型! 实际类型: {type(data_field)}")
-                        return []
-                    
-                    # 检查chunks字段是否存在
-                    if "chunks" not in data_field:
-                        self.logger.error("data字段中缺少'chunks'字段")
-                        return []
-                    
-                    # 获取检索结果并记录
-                    data_chunks = data_field["chunks"]
-                    self.logger.debug(f"chunks字段类型: {type(data_chunks)}")
-                    
-                    if not isinstance(data_chunks, list):
-                        self.logger.error(f"chunks字段不是列表类型! 实际类型: {type(data_chunks)}")
-                        return []
-                    
-                    self.logger.info(f"检索到 {len(data_chunks)} 个结果块")
-                    return data_chunks
-                    
-                except json.JSONDecodeError:
-                    self.logger.error(f"无法解析检索API响应: {response.text[:200]}...")
-                    return []
+            except httpx.TimeoutException:
+                self.logger.error("无流式检索请求超时")
+                return []
                 
-                except Exception as e:
-                    self.logger.error(f"处理检索响应异常: {str(e)}")
-                    self.logger.error(traceback.format_exc())
-                    return []
+            except httpx.RequestError as e:
+                self.logger.error(f"无流式检索请求错误: {str(e)}")
+                return []
                 
-        except httpx.TimeoutException:
-            self.logger.error("检索请求超时")
-            return []
-            
-        except httpx.RequestError as e:
-            self.logger.error(f"检索请求错误: {str(e)}")
-            return []
-            
+            except Exception as e:
+                self.logger.error(f"无流式检索过程中发生异常: {str(e)}")
+                self.logger.error(traceback.format_exc())
+                return []
+        
         except Exception as e:
-            self.logger.error(f"检索过程中发生异常: {str(e)}")
+            self.logger.error(f"无流式检索过程中发生异常: {str(e)}")
             self.logger.error(traceback.format_exc())
             return []
     

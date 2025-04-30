@@ -667,14 +667,17 @@
         }
         
         .reference-preview {
-            padding: 10px;
+            padding: 10px 15px;
             font-size: 13px;
             color: #444;
             background-color: #f9f9f9;
-            border-radius: 4px;
-            margin: 5px 10px;
+            border-radius: 0;
+            margin: 0;
             white-space: pre-wrap;
-            line-height: 1.4;
+            line-height: 1.5;
+            max-height: 150px;
+            overflow-y: auto;
+            border-bottom: 1px solid #eee;
         }
         
         .reference-view-btn {
@@ -1247,6 +1250,31 @@
                 // 检查data本身是否包含type字段
                 if (data.type) {
                     switch (data.type) {
+                        case 'thinking':
+                            // 处理thinking类型消息，启用思考模式
+                            if (data.data && data.data.type === 'thinking_mode') {
+                                processThinkingStart({
+                                    reason: data.data.reason || '正在思考...'
+                                });
+                            } else if (data.content) {
+                                // 处理思考内容
+                                appendThinkingStep(data.content);
+                            } else if (data.data && data.data.thinking) {
+                                // 处理嵌套在data中的thinking字段
+                                appendThinkingStep(data.data.thinking);
+                            }
+                            break;
+                        case 'chunk':
+                            // 处理知识库查询返回的chunk
+                            processThinkingReference({
+                                content: data.content || data.text || data.chunk || '无内容',
+                                source: data.source || data.title || '',
+                                score: data.score || data.relevance || '0'
+                            });
+                            break;
+                        case 'match_info':
+                            handleMatchInfo(data);
+                            break;
                         case 'thinking_start':
                             processThinkingStart(data);
                             break;
@@ -1267,9 +1295,6 @@
                             break;
                         case 'complete':
                             finalizeResponse(data);
-                            break;
-                        case 'match_info':
-                            handleMatchInfo(data);
                             break;
                         case 'error':
                             handleError(data.message || '未知错误');
@@ -1346,24 +1371,62 @@
                 const thinkingContainer = document.getElementById('thinkingContainer');
                 if (!thinkingContainer) {
                     // 如果没有思考容器，创建一个
-                    const container = createThinkingContainer('参考文档');
+                    const container = createThinkingContainer('知识库检索结果');
                     chatContainer.appendChild(container);
                 }
                 
-                // 确保内容中的<em>标签被处理
-                if (data.title) {
-                    data.title = data.title.replace(/<em>(.*?)<\/em>/g, '"$1"');
-                }
+                // 确保content属性存在且有效
+                let content = '';
+                let source = '';
                 
+                // 检查data.content数据结构，提取有效内容
                 if (data.content) {
-                    data.content = data.content.replace(/<em>(.*?)<\/em>/g, '"$1"');
+                    if (typeof data.content === 'string') {
+                        // 如果content直接是字符串
+                        content = data.content;
+                    } else if (typeof data.content === 'object') {
+                        // 如果content是对象，提取content字段
+                        content = data.content.content || '';
+                        source = data.content.source || '';
+                    }
+                } else if (data.source && data.text) {
+                    // 兼容另一种数据结构
+                    content = data.text;
+                    source = data.source;
                 }
                 
+                // 如果没有source但有content，使用content的一部分作为source
+                if (!source && content) {
+                    source = content.substring(0, 30) + (content.length > 30 ? '...' : '');
+                }
+                
+                // 默认标题
+                if (!source) {
+                    source = '检索内容片段';
+                }
+                
+                // 确保内容中的<em>标签被处理
+                if (source) {
+                    source = source.replace(/<em>(.*?)<\/em>/g, '"$1"');
+                }
+                
+                if (content) {
+                    content = content.replace(/<em>(.*?)<\/em>/g, '"$1"');
+                }
+                
+                // 将处理好的数据传递给appendReferenceCard
                 appendReferenceCard(
-                    data.title || 'Document',
-                    data.content || '',
-                    data.relevance || '0'
+                    source,
+                    content,
+                    (data.content && data.content.score) || data.score || '0'
                 );
+                
+                // 记录调试信息
+                console.log('Processed reference:', {
+                    source: source,
+                    contentPreview: content ? (content.substring(0, 50) + '...') : 'No content',
+                    score: (data.content && data.content.score) || data.score || '0'
+                });
             }
 
             function processThinkingEnd(data) {
@@ -1763,7 +1826,12 @@
                 // 添加标题
                 const title = document.createElement('div');
                 title.className = 'thinking-title';
-                title.innerHTML = '<i class="fas fa-brain"></i> 思考过程';
+                // 根据reason参数确定显示的图标和文本
+                if (reason === '知识库检索结果') {
+                    title.innerHTML = '<i class="fas fa-search"></i> 知识库检索结果';
+                } else {
+                    title.innerHTML = '<i class="fas fa-brain"></i> 思考过程';
+                }
                 header.appendChild(title);
                 
                 // 添加原因（如有）
@@ -1887,6 +1955,26 @@
                 const contentContainer = thinkingContainer.querySelector('.thinking-content');
                 if (!contentContainer) return;
                 
+                // 检查内容是否为对象格式
+                let textContent = content;
+                
+                // 如果content是对象，尝试解析thinking中的数据
+                if (typeof content === 'object') {
+                    if (content.content) {
+                        textContent = content.content;
+                    } else if (content.thinking) {
+                        textContent = content.thinking;
+                    } else {
+                        // 尝试将对象转换为字符串显示
+                        try {
+                            textContent = JSON.stringify(content, null, 2);
+                        } catch (e) {
+                            console.error('无法解析思考内容:', e);
+                            textContent = '无法显示的思考内容';
+                        }
+                    }
+                }
+                
                 // 创建思考步骤元素
                 const step = document.createElement('div');
                 step.className = 'thinking-step';
@@ -1894,7 +1982,7 @@
                 // 添加内容
                 const stepContent = document.createElement('div');
                 stepContent.className = 'thinking-step-content';
-                stepContent.textContent = content;
+                stepContent.textContent = textContent;
                 step.appendChild(stepContent);
                 
                 // 添加到思考内容容器
@@ -1948,41 +2036,66 @@
                 // 添加标题
                 const titleElem = document.createElement('div');
                 titleElem.className = 'reference-title';
-                titleElem.textContent = title || 'Document';
+                
+                // 分析标题确定文档类型
+                let docType = '文档';
+                if (title.includes('.txt') || title.includes('.md')) {
+                    docType = '文本文件';
+                } else if (title.includes('.pdf')) {
+                    docType = 'PDF文档';
+                } else if (title.includes('.html') || title.includes('.htm')) {
+                    docType = '网页';
+                } else if (title.includes('.doc') || title.includes('.docx')) {
+                    docType = 'Word文档';
+                } else if (title.includes('.xls') || title.includes('.xlsx')) {
+                    docType = 'Excel表格';
+                } else if (title.includes('.ppt') || title.includes('.pptx')) {
+                    docType = 'PPT演示';
+                } else if (title.toLowerCase().includes('http')) {
+                    docType = '网页链接';
+                }
+                
+                // 生成新标题与类型信息
+                const displayTitle = title;
+                titleElem.innerHTML = `<i class="fas fa-file-alt"></i> <span style="color:#1a73e8;">[${docType}]</span> ${displayTitle}`;
                 card.appendChild(titleElem);
                 
                 // 处理内容中的<em>标签
                 content = content.replace(/<em>(.*?)<\/em>/g, '"$1"');
                 
-                // 添加内容预览
+                // 添加内容预览 - 始终显示内容预览，确保不为空
                 if (content) {
                     const previewElem = document.createElement('div');
                     previewElem.className = 'reference-preview';
                     
-                    // 截取预览内容（最多150个字符）
-                    const previewContent = content.length > 150 
-                        ? content.substring(0, 147) + '...' 
-                        : content;
-                    
-                    previewElem.textContent = previewContent;
+                    // 显示完整内容，不再截取
+                    previewElem.textContent = content;
                     card.appendChild(previewElem);
-                    
-                    // 添加查看详情按钮
-                    const viewButton = document.createElement('button');
-                    viewButton.className = 'reference-view-btn';
-                    viewButton.textContent = '查看全文';
-                    viewButton.onclick = function() {
-                        showModal(title || 'Document', content);
-                    };
-                    card.appendChild(viewButton);
+                } else {
+                    // 如果没有内容，显示一个提示
+                    const noContentElem = document.createElement('div');
+                    noContentElem.className = 'reference-preview';
+                    noContentElem.innerHTML = '<i>没有获取到内容</i>';
+                    card.appendChild(noContentElem);
                 }
                 
                 // 添加相关性评分（如果有）
                 if (relevance && relevance !== '0') {
-                    const relevanceElem = document.createElement('div');
-                    relevanceElem.className = 'reference-relevance';
-                    relevanceElem.textContent = `相关性: ${relevance}`;
-                    card.appendChild(relevanceElem);
+                    const scoreContainer = document.createElement('div');
+                    scoreContainer.className = 'reference-score';
+                    scoreContainer.innerHTML = `相关度: <b>${parseFloat(relevance).toFixed(2)}</b>`;
+                    titleElem.appendChild(scoreContainer);
+                }
+                
+                // 添加查看全文按钮
+                if (content && content.length > 0) {
+                    const viewButton = document.createElement('button');
+                    viewButton.className = 'reference-view-btn';
+                    viewButton.innerHTML = '<i class="fas fa-expand-alt"></i> 查看全文';
+                    viewButton.onclick = function() {
+                        showModal(title || '检索内容', content);
+                    };
+                    card.appendChild(viewButton);
                 }
                 
                 // 添加卡片到引用容器
